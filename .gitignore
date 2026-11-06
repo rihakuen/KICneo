@@ -1,0 +1,26 @@
+# --- 秘密情報（絶対にコミットしない）---
+# 実際の Supabase URL / キーが入っている。共有するのは Secrets.swift.example だけ
+KICneo/Models/Secrets.swift
+
+# --- Xcode の個人設定・ビルド成果物 ---
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# --- macOS ---
+.DS_Store
+
+# --- 作業用のバックアップ（Claude が変更前に保存したもの）---
+Backups/
+
+# --- Python（探索用スクリプト）---
+.venv/
+.env
+__pycache__/
+*.pyc
+python/dump/
+dump/

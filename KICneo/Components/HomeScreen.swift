@@ -16,8 +16,6 @@ struct HomeScreen: View {
   var timetable: [TimetableDay]
   var isLoadingTimetable: Bool
   var timetableLoadFailed: Bool
-  /// 出欠・出席率を最後に学校から取得した時刻（見出しの右に「最終更新」として出す）
-  var updatedAt: Date?
   var onRefresh: () async -> Void
   /// 表示する月が変わったとき（初回表示を含む）に、その月の出欠・出席率を取得してもらう。
   var onMonthChange: (_ from: Date, _ through: Date) async -> Void
@@ -45,7 +43,6 @@ struct HomeScreen: View {
     timetable: [TimetableDay],
     isLoadingTimetable: Bool,
     timetableLoadFailed: Bool,
-    updatedAt: Date? = nil,
     onRefresh: @escaping () async -> Void,
     onMonthChange: @escaping (_ from: Date, _ through: Date) async -> Void
   ) {
@@ -60,7 +57,6 @@ struct HomeScreen: View {
     self.timetable = timetable
     self.isLoadingTimetable = isLoadingTimetable
     self.timetableLoadFailed = timetableLoadFailed
-    self.updatedAt = updatedAt
     self.onRefresh = onRefresh
     self.onMonthChange = onMonthChange
     let calendar = AttendanceRatePeriod.calendar
@@ -320,16 +316,6 @@ struct HomeScreen: View {
       ScrollView {
         VStack(alignment: .leading, spacing: AppTheme.Space.cardGap) {
           KICneoHeader()
-            .overlay(alignment: .bottomTrailing) {
-              if let updatedAt {
-                Text("最終更新 \(updatedText(updatedAt))")
-                  .font(AppTheme.Typography.caption)
-                  .monospacedDigit()
-                  .foregroundStyle(AppTheme.textSecondary)
-                  .contentTransition(.numericText())
-                  .accessibilityHint("下に引くと、学校から取り直します")
-              }
-            }
           if let errorMessage {
             ConnectionNotice(text: errorMessage)
           }
@@ -413,7 +399,11 @@ struct HomeScreen: View {
         VStack(alignment: .leading, spacing: AppTheme.Space.cardStack) {
           if showsTrend {
             AttendanceTrendChart(records: records, rates: rates, month: focusMonth, scope: rateScope)
-              .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+              // 開くときは今の動き（ふわっと広がる）。閉じるときは下の内訳がせり上がる前に素早く消して、重ならないようにする
+              .transition(.asymmetric(
+                insertion: .opacity.combined(with: .scale(scale: 0.96, anchor: .top)),
+                removal: .opacity.animation(.easeOut(duration: 0.1))
+              ))
           }
           monthBreakdown
         }
@@ -439,7 +429,7 @@ struct HomeScreen: View {
               .foregroundStyle(AppTheme.textSecondary)
               .contentTransition(.numericText())
             Spacer(minLength: AppTheme.Space.sm)
-            Text(hasData ? "\(stats.present) / \(total)コマ出席" : "記録なし")
+            Text(hasData ? "\(stats.present) / \(total)コマ出席" : "データなし")
               .font(AppTheme.Typography.bodyEmphasis)
               .monospacedDigit()
               .contentTransition(.numericText(value: Double(stats.present)))
@@ -770,13 +760,6 @@ struct HomeScreen: View {
     }
     .presentationDetents([.medium, .large])
     .presentationDragIndicator(.visible)
-  }
-
-  /// 「11/7 4:50」（今日なら「今日 4:50」）
-  private func updatedText(_ date: Date) -> String {
-    let c = calendar.dateComponents([.month, .day, .hour, .minute], from: date)
-    let time = String(format: "%d:%02d", c.hour ?? 0, c.minute ?? 0)
-    return calendar.isDateInToday(date) ? "今日 \(time)" : "\(c.month ?? 0)/\(c.day ?? 0) \(time)"
   }
 
   private func restText(_ date: Date) -> String {

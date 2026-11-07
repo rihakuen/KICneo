@@ -71,14 +71,12 @@ struct AttendanceTrendChart: View {
   var body: some View {
     let points = points
     let selected = nearest(points)
+    // 記録が2日分に満たない期間は、線の代わりに「データなし」を出す
     VStack(alignment: .leading, spacing: AppTheme.Space.sm) {
-      infoLine(points: points, selected: selected)
       if points.count < 2 {
-        Text("この期間の出欠の記録が2日分以上になると、推移を表示します。")
-          .font(AppTheme.Typography.caption)
-          .foregroundStyle(AppTheme.textSecondary)
-          .frame(maxWidth: .infinity, minHeight: 80, alignment: .center)
+        noDataPlaceholder
       } else {
+        infoLine(points: points, selected: selected)
         chart(points: points, selected: selected)
           .frame(height: 140)
         HStack {
@@ -97,11 +95,25 @@ struct AttendanceTrendChart: View {
     .onChange(of: scope) { _, _ in scrubDate = nil }
   }
 
+  /// 線を引けるだけの記録がない期間に出す枠（グラフと同じ高さで、カードの大きさが変わらないようにする）
+  private var noDataPlaceholder: some View {
+    RoundedRectangle(cornerRadius: 10, style: .continuous)
+      .fill(AppTheme.elevatedBackground)
+      .frame(height: 140)
+      .overlay {
+        Text("データなし")
+          .font(AppTheme.Typography.body)
+          .foregroundStyle(AppTheme.textSecondary)
+      }
+      .accessibilityElement(children: .combine)
+  }
+
   /// グラフの上の1行：なぞっているときはその日の値、離しているときは最新のコマ数
   private func infoLine(points: [Point], selected: Point?) -> some View {
     let point = selected ?? points.last
     return HStack(alignment: .firstTextBaseline, spacing: AppTheme.Space.sm) {
-      Text(selected == nil ? "推移" : dayText(selected?.date))
+      // 見出しの文字は出さず、なぞっているときだけ日付を出す
+      Text(dayText(selected?.date))
         .font(AppTheme.Typography.label)
         .foregroundStyle(AppTheme.textSecondary)
       Spacer(minLength: AppTheme.Space.sm)

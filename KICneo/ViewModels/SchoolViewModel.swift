@@ -33,7 +33,7 @@ final class SchoolViewModel: ObservableObject {
   /// 月・学年（4月〜翌3月）・総合を学校の集計ページから別々に取得する。
   @Published private(set) var attendanceRates = AttendanceRates()
   @Published private(set) var loadedRatePeriods: Set<AttendanceRatePeriod> = []
-  /// 出欠・出席率を最後に学校から取得した時刻（ホームの「最終更新」）
+  /// 出欠・出席率を最後に学校から取得した時刻
   @Published private(set) var attendanceUpdatedAt: Date?
   @Published private(set) var loadingRatePeriods: Set<AttendanceRatePeriod> = []
   @Published private(set) var failedRatePeriods: Set<AttendanceRatePeriod> = []

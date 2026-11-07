@@ -30,7 +30,6 @@ struct ContentView: View {
             timetable: school.timetable,
             isLoadingTimetable: school.isLoadingTimetable,
             timetableLoadFailed: school.timetableLoadFailed,
-            updatedAt: school.attendanceUpdatedAt,
             onRefresh: {
               async let attendance: Void = school.refreshAttendance()
               async let timetable: Void = school.loadTimetable(force: true)

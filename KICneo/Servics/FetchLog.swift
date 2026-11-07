@@ -61,7 +61,7 @@ nonisolated enum FetchLog {
     update(account) { $0.fetched[key.rawValue] = date }
   }
 
-  /// 最後に取得した時刻（画面の「最終更新」に出す）
+  /// 最後に取得した時刻
   static func lastFetched(_ key: Key, account: String?) -> Date? {
     account.flatMap { load($0).fetched[key.rawValue] }
   }

@@ -643,8 +643,7 @@ final class SchoolViewModel: ObservableObject {
 
   // MARK: 学校からのお知らせ
 
-  /// トップページの未読のお知らせを読み、端末に保存してある分とまとめる。
-  /// 学校側では詳細を開くと既読になって一覧から消えるので、消えた分も 60 日・30 件まで残す（詳細は保存済みのものを出す）。
+  /// 学校の掲示板（全分類）の掲載中のお知らせを読む。既読のものも掲載期間中は出る。
   func loadNotices(force: Bool = false) async {
     guard isLoggedIn, !isDemo, !isLoadingNotices else { return }
     if !force, !notices.isEmpty, FetchLog.isFresh(.notices, account: accountID) { return }
@@ -669,22 +668,18 @@ final class SchoolViewModel: ObservableObject {
     }
   }
 
+  /// 掲示板の一覧（掲載中のものだけ）を新しい順に並べる。掲載が終わったものは学校の一覧から消えるので、端末にも残さない。
   nonisolated static func mergeNotices(fetched: [SchoolNotice], saved: [SchoolNotice], now: Date = .now) -> [SchoolNotice] {
-    let fetchedKeys = Set(fetched.map(\.key))
-    let limit = AttendanceRatePeriod.calendar.date(byAdding: .day, value: -60, to: now) ?? now
-    let kept = saved
-      .filter { !fetchedKeys.contains($0.key) && ($0.postedAt ?? now) >= limit }
-      .map { notice -> SchoolNotice in
-        var stale = notice
-        stale.eventTarget = nil // トップページから消えたので、学校の詳細ページはもう開けない
-        return stale
-      }
-    let all = fetched + kept
-    return Array(all.sorted { ($0.postedAt ?? .distantPast) > ($1.postedAt ?? .distantPast) }.prefix(30))
+    var seen = Set<String>()
+    return fetched
+      .filter { seen.insert($0.key).inserted }
+      .sorted { ($0.postedAt ?? .distantPast) > ($1.postedAt ?? .distantPast) }
   }
 
+  /// 未読の印：学校側で未読（このアプリで開いたものは既読）。学校の未読がわからない保存内容は、開いたかどうかだけで判断
   func isNoticeUnread(_ notice: SchoolNotice) -> Bool {
-    !readNoticeKeys.contains(notice.key)
+    guard !readNoticeKeys.contains(notice.key) else { return false }
+    return notice.unreadOnServer ?? true
   }
 
   func cachedNoticeDetail(_ notice: SchoolNotice) -> SchoolNoticeDetail? {

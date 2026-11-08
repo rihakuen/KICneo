@@ -336,13 +336,13 @@ extension DemoData {
 
   static var notices: [SchoolNotice] {
     [
-      SchoolNotice(section: "お知らせ", title: "【重要】今月分の出席状況確認のお願い", category: "連絡・スケジュール",
+      SchoolNotice(section: "連絡・スケジュール", title: "【重要】今月分の出席状況確認のお願い", category: "連絡・スケジュール",
                    date: noticeDate(1), poster: "教務課", hasAttachment: true, eventTarget: "demo-1"),
-      SchoolNotice(section: "授業関連", title: "後期 定期試験の時間割を掲載しました", category: "授業変更関連",
+      SchoolNotice(section: "学科からのお知らせ", title: "後期 定期試験の時間割を掲載しました", category: "学科からのお知らせ",
                    date: noticeDate(3), poster: "教務課", hasAttachment: false, eventTarget: "demo-2"),
-      SchoolNotice(section: "お知らせ", title: "学内合同企業説明会（12月）の参加申込について", category: "キャリアセンター",
+      SchoolNotice(section: "キャリアセンター", title: "学内合同企業説明会（12月）の参加申込について", category: "キャリアセンター",
                    date: noticeDate(5), poster: "キャリアセンター", hasAttachment: false, eventTarget: "demo-3"),
-      SchoolNotice(section: "連絡事項", title: "冬季休業中の図書室の開室日", category: "事務局窓口・奨学金",
+      SchoolNotice(section: "事務局窓口・奨学金", title: "冬季休業中の図書室の開室日", category: "事務局窓口・奨学金",
                    date: noticeDate(9), poster: "事務局", hasAttachment: false, eventTarget: "demo-4")
     ]
   }

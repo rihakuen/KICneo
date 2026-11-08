@@ -108,7 +108,6 @@ struct HomeScreen: View {
   @Namespace private var selectionNamespace
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let calendar = AttendanceRatePeriod.calendar
-  private let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
   /// 表示・選択できる月の範囲（今月を 0 としたずれ）。いちばん古い記録（出欠・授業）がある年の1月まで、先は1年後まで。
   /// それより前の年は出さない。
   private var pageRange: ClosedRange<Int> { oldestOffset...12 }
@@ -997,23 +996,38 @@ struct HomeScreen: View {
     }
   }
 
+  /// 月のカレンダー。曜日の行＋その月に必要な週の数（4〜6）の行を、ふつうの（遅延しない）縦横の並びで作る。
+  /// LazyVGrid は、測った高さが見積もりになり、月によって最後の週が切れたり下が空いたりしたため使わない（最大 42 マス）。
   private func monthGrid(_ monthStart: Date) -> some View {
     let days = dates(in: monthStart)
     let leading = calendar.component(.weekday, from: monthStart) - 1
-    let trailing = max(0, weekRows(monthStart) * 7 - leading - days.count) // その月に必要な週の数だけ埋める
-    let dayAfterLast = calendar.date(byAdding: .day, value: days.count, to: monthStart) ?? monthStart
-    return LazyVGrid(columns: columns, spacing: 6) {
-      ForEach(Array(["日", "月", "火", "水", "木", "金", "土"].enumerated()), id: \.offset) { _, label in
-        Text(label).font(AppTheme.Typography.captionEmphasis).foregroundStyle(AppTheme.textSecondary)
+    let rows = weekRows(monthStart)
+    // 各マス：その月の日（タップできる）か、前月・翌月の日（薄い数字だけ）か
+    let cells: [(date: Date, inMonth: Bool)] = (0..<(rows * 7)).map { index in
+      let offset = index - leading
+      if offset >= 0, offset < days.count { return (days[offset], true) }
+      return (calendar.date(byAdding: .day, value: offset, to: monthStart) ?? monthStart, false)
+    }
+    return VStack(spacing: 6) {
+      HStack(spacing: 6) {
+        ForEach(Array(["日", "月", "火", "水", "木", "金", "土"].enumerated()), id: \.offset) { _, label in
+          Text(label)
+            .font(AppTheme.Typography.captionEmphasis)
+            .foregroundStyle(AppTheme.textSecondary)
+            .frame(maxWidth: .infinity)
+        }
       }
-      // 前月・翌月の日付は、薄いセルで埋める（押せない）。ID は曜日ラベル（0〜6）や日付と重ならないようにする
-      ForEach((0..<leading).map { -($0 + 1) }, id: \.self) { id in
-        let index = -id - 1 // 0 始まりの位置（左から何番目の空きマスか）
-        fillerCell(calendar.date(byAdding: .day, value: index - leading, to: monthStart))
-      }
-      ForEach(days, id: \.self) { date in dayCell(date) }
-      ForEach((0..<trailing).map { 100 + $0 }, id: \.self) { id in
-        fillerCell(calendar.date(byAdding: .day, value: id - 100, to: dayAfterLast))
+      ForEach(0..<rows, id: \.self) { row in
+        HStack(spacing: 6) {
+          ForEach(0..<7, id: \.self) { column in
+            let cell = cells[row * 7 + column]
+            if cell.inMonth {
+              dayCell(cell.date)
+            } else {
+              fillerCell(cell.date)
+            }
+          }
+        }
       }
     }
     // 中身どおりの高さを測って、ページャーの高さに使う

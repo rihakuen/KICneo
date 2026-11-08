@@ -108,8 +108,8 @@ struct SchoolLoginView: View {
   private enum Field { case username, password }
   /// 表示されたときの入場（タイル → 見出し → 入力欄の順に浮かぶ）
   @State private var appeared = false
-  /// ログインできたあと、ホームへ移る前に中身を消しておく
-  @State private var leaving = false
+  /// 起動画面・ホームとロゴをつなぐため、タイルの位置を知らせる（起動画面のタイルが重なっている間は隠す）
+  @Environment(\.brandAnchors) private var anchors
 
   var body: some View {
     ZStack {
@@ -118,9 +118,10 @@ struct SchoolLoginView: View {
         VStack(alignment: .leading, spacing: 32) {
           VStack(alignment: .leading, spacing: AppTheme.Space.lg) {
             BrandIconTile(side: 72, revealed: appeared)
+              .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { anchors.store?.loginTile = $0 }
               .shadow(color: BrandColors.tile.opacity(0.22), radius: 12, y: 8)
               .scaleEffect(appeared || reduceMotion ? 1 : 0.86, anchor: .bottomLeading)
-              .opacity(appeared ? 1 : 0)
+              .opacity(appeared && !anchors.hideLoginTile ? 1 : 0)
               .animation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.5, dampingFraction: 0.8), value: appeared)
               .accessibilityHidden(true)
 
@@ -173,9 +174,7 @@ struct SchoolLoginView: View {
                 await school.login(id: username, password: password)
                 if school.isLoggedIn {
                   password = ""
-                  // 中身を消してから、ホームへの「タイルが広がる」動きに渡す
-                  withAnimation(.easeIn(duration: reduceMotion ? 0.1 : 0.22)) { leaving = true }
-                  try? await Task.sleep(for: .milliseconds(reduceMotion ? 100 : 240))
+                  // ここからは ContentView が、タイルの文字をホームの見出しへ飛ばしながらこの画面を消す
                   onLoggedIn()
                 }
               }
@@ -192,6 +191,8 @@ struct SchoolLoginView: View {
               .animation(AppTheme.Motion.text(reduce: reduceMotion), value: school.isLoading)
             }
             .buttonStyle(PrimaryButtonStyle())
+            // ログイン後、この位置からアイコンの色が広がる
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { anchors.store?.loginButton = $0 }
             .disabled(school.isLoading || username.isEmpty || password.isEmpty)
             .opacity(username.isEmpty || password.isEmpty ? 0.5 : 1)
           }
@@ -205,8 +206,7 @@ struct SchoolLoginView: View {
             .fixedSize(horizontal: false, vertical: true)
             .modifier(LoginEntrance(shown: appeared, delay: 0.35, reduceMotion: reduceMotion))
         }
-        .opacity(leaving ? 0 : 1)
-        .scaleEffect(leaving && !reduceMotion ? 0.97 : 1)
+
         .foregroundStyle(AppTheme.textPrimary)
         .padding(AppTheme.Space.page)
         .frame(maxWidth: 480)
@@ -214,10 +214,7 @@ struct SchoolLoginView: View {
       }
       .scrollDismissesKeyboard(.interactively)
     }
-    .onAppear {
-      leaving = false
-      appeared = true
-    }
+    .onAppear { appeared = true }
   }
 }
 

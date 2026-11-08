@@ -1,9 +1,9 @@
 import Foundation
 
-/// 学校ポータルのトップページにある「未読のお知らせ／授業関連／連絡事項」の1件。
-/// 学校側では、詳細を開くと既読になってトップページから消えるので、端末にも保存しておく。
+/// 学校ポータルの掲示板（連絡・スケジュール／事務局窓口・奨学金／学科からのお知らせ／キャリアセンター／
+/// システム管理者からのお知らせ）にある、掲載中のお知らせの1件。既読のものも掲載期間中は表示する。
 nonisolated struct SchoolNotice: Codable, Hashable, Identifiable, Sendable {
-  /// 「お知らせ」「授業関連」「連絡事項」（トップページのどの欄にあったか）
+  /// 掲示板の分類名（「連絡・スケジュール」など）
   let section: String
   let title: String
   /// 掲示板の分類（「キャリアセンター」「連絡・スケジュール」など）
@@ -12,12 +12,18 @@ nonisolated struct SchoolNotice: Codable, Hashable, Identifiable, Sendable {
   let date: String
   let poster: String
   let hasAttachment: Bool
-  /// 詳細を開く postback の対象。トップページから消えたもの（端末に保存していた分）は nil。
+  /// 詳細を開く postback の対象（一覧のページの中の番号）
   var eventTarget: String?
+  /// 掲示板の分類の番号（Personal.aspx?cat= の値）。一覧のページを開き直すのに使う
+  var listCategory: String? = nil
+  /// 掲載終了日（学校の表記のまま）
+  var endDate: String? = nil
+  /// 学校側で未読か（一覧の「既読にする」のリンクがあるもの）
+  var unreadOnServer: Bool? = nil
 
   var id: String { key }
   /// 同じお知らせかどうかの判定用（postback の番号は毎回変わりうるので含めない）
-  var key: String { [section, category, date, title].joined(separator: "|") }
+  var key: String { [section, date, title].joined(separator: "|") }
 
   /// 並べ替え・保存期間の判定用の日付
   var postedAt: Date? {

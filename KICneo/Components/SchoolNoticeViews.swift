@@ -1,7 +1,8 @@
 import PDFKit
 import SwiftUI
 
-/// ホームの「学校からのお知らせ」。学校ポータルのトップページにある未読のお知らせを新しい順に並べる。
+/// ホームの「学校からのお知らせ」。学校ポータルの掲示板（全分類）の掲載中のお知らせを新しい順に並べる。
+/// 開いたあとも、掲載期間が終わるまでは一覧に残る（未読の印だけ消える）。
 /// 3件まで出し、それより多いときは「すべて表示」で広げる。タップで詳細（本文・添付の画像）を下から開く。
 struct SchoolNoticesCard: View {
   @ObservedObject var school: SchoolViewModel
@@ -146,7 +147,7 @@ struct SchoolNoticeDetailSheet: View {
       ScrollView {
         VStack(alignment: .leading, spacing: AppTheme.Space.lg) {
           VStack(alignment: .leading, spacing: AppTheme.Space.sm) {
-            Text([notice.section, notice.category].filter { !$0.isEmpty }.joined(separator: " · "))
+            Text(notice.category.isEmpty ? notice.section : notice.category)
               .font(AppTheme.Typography.captionEmphasis)
               .foregroundStyle(AppTheme.primaryAction)
             Text(detail?.title.isEmpty == false ? detail!.title : notice.title)
@@ -200,7 +201,7 @@ struct SchoolNoticeDetailSheet: View {
   private var meta: String {
     let poster = detail?.poster.isEmpty == false ? detail!.poster : notice.poster
     let start = detail?.startDate.isEmpty == false ? detail!.startDate : notice.date
-    let end = detail?.endDate ?? ""
+    let end = detail?.endDate.isEmpty == false ? detail!.endDate : (notice.endDate ?? "")
     let period = end.isEmpty ? start : "\(start) 〜 \(end)"
     return [poster, period].filter { !$0.isEmpty }.joined(separator: "  ·  ")
   }
@@ -209,7 +210,7 @@ struct SchoolNoticeDetailSheet: View {
   private var unavailable: some View {
     VStack(alignment: .leading, spacing: AppTheme.Space.md) {
       Text(notice.eventTarget == nil
-           ? "学校のトップページから外れたお知らせのため、詳細を読み込めません。学校のポータルの掲示板で確認してください。"
+           ? "このお知らせの詳細は読み込めません。学校のポータルの掲示板で確認してください。"
            : "詳細を読み込めませんでした。")
         .font(AppTheme.Typography.body)
         .foregroundStyle(AppTheme.textSecondary)

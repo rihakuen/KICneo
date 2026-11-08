@@ -10,9 +10,41 @@ struct AttendanceTrendChart: View {
   /// ホームで表示している月（月間・年間の範囲はこの月から決める）
   let month: Date
   let scope: AttendanceRateScope
-  /// 指でなぞっている位置（横軸の日付）
-  @State private var scrubDate: Date?
+  /// 指でなぞっている位置（横軸のサンプルの番号）
+  @State private var scrubIndex: Int?
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  /// 線を描くための点。期間の最初〜最後の記録の間を、決まった数に等間隔で区切った位置の値。
+  /// 横の位置（番号）がいつも同じなので、月や期間を切り替えると、線は横から入れ替わらず上下に形を変える。
+  struct Sample: Identifiable, Equatable {
+    let index: Int
+    let date: Date
+    /// 線の高さ（前後の記録の間をなめらかにつないだ値）
+    let lineRate: Double
+    /// その日までに分かっている記録の値（なぞったときに出す）
+    let rate: Double
+    let attended: Int
+    let total: Int
+    var id: Int { index }
+  }
+
+  private static let sampleCount = 48
+
+  private func samples(_ points: [Point]) -> [Sample] {
+    guard let first = points.first, let last = points.last, points.count >= 2 else { return [] }
+    let span = last.date.timeIntervalSince(first.date)
+    var j = 0
+    return (0..<Self.sampleCount).map { i in
+      let t = first.date.addingTimeInterval(span * Double(i) / Double(Self.sampleCount - 1))
+      while j + 1 < points.count, points[j + 1].date <= t { j += 1 }
+      let a = points[j]
+      let b = points[min(j + 1, points.count - 1)]
+      let gap = b.date.timeIntervalSince(a.date)
+      let f = gap > 0 ? min(1, max(0, t.timeIntervalSince(a.date) / gap)) : 0
+      return Sample(index: i, date: t, lineRate: a.rate + (b.rate - a.rate) * f,
+                    rate: a.rate, attended: a.attended, total: a.total)
+    }
+  }
 
   struct Point: Identifiable, Equatable {
     let date: Date
@@ -63,21 +95,17 @@ struct AttendanceTrendChart: View {
     return result
   }
 
-  private func nearest(_ points: [Point]) -> Point? {
-    guard let scrubDate else { return nil }
-    return points.min { abs($0.date.timeIntervalSince(scrubDate)) < abs($1.date.timeIntervalSince(scrubDate)) }
-  }
-
   var body: some View {
     let points = points
-    let selected = nearest(points)
+    let samples = samples(points)
+    let selected = scrubIndex.flatMap { index in samples.first { $0.index == index } }
     // 記録が2日分に満たない期間は、線の代わりに「データなし」を出す
     VStack(alignment: .leading, spacing: AppTheme.Space.sm) {
-      if points.count < 2 {
+      if samples.isEmpty {
         noDataPlaceholder
       } else {
-        infoLine(points: points, selected: selected)
-        chart(points: points, selected: selected)
+        infoLine(latest: points.last, selected: selected)
+        chart(samples: samples, selected: selected)
           .frame(height: 140)
         HStack {
           Text(dayText(points.first?.date))
@@ -87,12 +115,14 @@ struct AttendanceTrendChart: View {
         .font(AppTheme.Typography.caption)
         .monospacedDigit()
         .foregroundStyle(AppTheme.textSecondary)
+        .contentTransition(.numericText())
       }
     }
     .onChange(of: selected?.id) { _, newValue in
       if newValue != nil { AppHaptics.selection() }
     }
-    .onChange(of: scope) { _, _ in scrubDate = nil }
+    .onChange(of: scope) { _, _ in scrubIndex = nil }
+    .onChange(of: month) { _, _ in scrubIndex = nil }
   }
 
   /// 線を引けるだけの記録がない期間に出す枠（グラフと同じ高さで、カードの大きさが変わらないようにする）
@@ -109,34 +139,37 @@ struct AttendanceTrendChart: View {
   }
 
   /// グラフの上の1行：なぞっているときはその日の値、離しているときは最新のコマ数
-  private func infoLine(points: [Point], selected: Point?) -> some View {
-    let point = selected ?? points.last
+  private func infoLine(latest: Point?, selected: Sample?) -> some View {
+    let rate = selected?.rate ?? latest?.rate
+    let attended = selected?.attended ?? latest?.attended
+    let total = selected?.total ?? latest?.total
     return HStack(alignment: .firstTextBaseline, spacing: AppTheme.Space.sm) {
       // 見出しの文字は出さず、なぞっているときだけ日付を出す
       Text(dayText(selected?.date))
         .font(AppTheme.Typography.label)
         .foregroundStyle(AppTheme.textSecondary)
       Spacer(minLength: AppTheme.Space.sm)
-      if let point {
-        if selected != nil {
-          Text(String(format: "%.2f%%", point.rate))
-            .font(AppTheme.Typography.bodyEmphasis)
-            .foregroundStyle(AppTheme.primaryAction)
-            .contentTransition(.numericText(value: point.rate))
-        }
-        Text("\(point.attended) / \(point.total)コマ")
+      if selected != nil, let rate {
+        Text(String(format: "%.2f%%", rate))
+          .font(AppTheme.Typography.bodyEmphasis)
+          .foregroundStyle(AppTheme.primaryAction)
+          .contentTransition(.numericText(value: rate))
+      }
+      if let attended, let total {
+        Text("\(attended) / \(total)コマ")
           .font(AppTheme.Typography.body)
           .foregroundStyle(AppTheme.textSecondary)
-          .contentTransition(.numericText(value: Double(point.attended)))
+          .contentTransition(.numericText(value: Double(attended)))
       }
     }
     .monospacedDigit()
-    .animation(AppTheme.Motion.text(reduce: reduceMotion), value: point?.id)
+    .animation(AppTheme.Motion.text(reduce: reduceMotion), value: selected?.id)
+    .animation(AppTheme.Motion.text(reduce: reduceMotion), value: attended)
   }
 
-  private func chart(points: [Point], selected: Point?) -> some View {
+  private func chart(samples: [Sample], selected: Sample?) -> some View {
     // 上下の幅は、値の範囲に少しだけ余白を足す（線が縦に伸びすぎないよう、最低でも20ポイント分の幅をとる）
-    let values = points.map(\.rate)
+    let values = samples.map(\.lineRate)
     let minValue = values.min() ?? 0
     let maxValue = values.max() ?? 100
     let span = max(20, maxValue - minValue + 6)
@@ -144,23 +177,23 @@ struct AttendanceTrendChart: View {
     let lower = max(0, upper - span)
     let tint = AppTheme.primaryAction
     return Chart {
-      ForEach(points) { point in
+      ForEach(samples) { sample in
         AreaMark(
-          x: .value("日付", point.date),
+          x: .value("位置", sample.index),
           yStart: .value("下限", lower),
-          yEnd: .value("出席率", point.rate))
+          yEnd: .value("出席率", sample.lineRate))
           .interpolationMethod(.monotone)
           .foregroundStyle(LinearGradient(colors: [tint.opacity(0.16), tint.opacity(0)], startPoint: .top, endPoint: .bottom))
-        LineMark(x: .value("日付", point.date), y: .value("出席率", point.rate))
+        LineMark(x: .value("位置", sample.index), y: .value("出席率", sample.lineRate))
           .interpolationMethod(.monotone)
           .foregroundStyle(tint)
           .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
       }
       if let selected {
-        RuleMark(x: .value("日付", selected.date))
+        RuleMark(x: .value("位置", selected.index))
           .foregroundStyle(tint.opacity(0.35))
           .lineStyle(StrokeStyle(lineWidth: 1))
-        PointMark(x: .value("日付", selected.date), y: .value("出席率", selected.rate))
+        PointMark(x: .value("位置", selected.index), y: .value("出席率", selected.lineRate))
           .symbol {
             Circle()
               .strokeBorder(tint, lineWidth: 2.5)
@@ -170,9 +203,8 @@ struct AttendanceTrendChart: View {
       }
     }
     .chartYScale(domain: lower...upper)
-    // 横軸は最初の記録の日〜最後の記録の日。日数が少なくても線が左右いっぱいに引かれる
-    // （日単位の目盛りにすると、点が各日の真ん中に置かれ、2〜3日分だと線が中央に短く寄ってしまう）
-    .chartXScale(domain: (points.first?.date ?? .now)...(points.last?.date ?? .now))
+    // 横軸は「最初の記録の日〜最後の記録の日」を等間隔に区切った番号。日数が少なくても線は左右いっぱい
+    .chartXScale(domain: 0...(Self.sampleCount - 1))
     .chartXAxis(.hidden)
     // グラフの範囲がわかるよう、描画域を細い枠で囲む
     .chartPlotStyle { plot in
@@ -191,6 +223,8 @@ struct AttendanceTrendChart: View {
         }
       }
     }
+    // 月や期間を切り替えたとき、同じ位置の点が上下に動いて線の形が変わる
+    .animation(reduceMotion ? nil : .smooth(duration: 0.5), value: values)
     // 少し長押ししてからなぞると、その日の値を出す（離すと消える）。
     // すぐに動かしたときはページのスクロールになるので、グラフの上からでも上下にスクロールできる
     .chartOverlay { proxy in
@@ -204,20 +238,22 @@ struct AttendanceTrendChart: View {
               .onChanged { value in
                 switch value {
                 case .second(true, nil):
-                  if scrubDate == nil { AppHaptics.light() }
+                  if scrubIndex == nil { AppHaptics.light() }
                 case .second(true, let drag?):
                   guard let frame = proxy.plotFrame else { return }
                   let x = min(max(drag.location.x - geo[frame].origin.x, 0), geo[frame].width)
-                  scrubDate = proxy.value(atX: x, as: Date.self)
+                  if let position = proxy.value(atX: x, as: Double.self) {
+                    scrubIndex = min(max(Int(position.rounded()), 0), Self.sampleCount - 1)
+                  }
                 default:
                   break
                 }
               }
-              .onEnded { _ in scrubDate = nil })
+              .onEnded { _ in scrubIndex = nil })
       }
     }
     .accessibilityLabel("出席率の推移")
-    .accessibilityValue(points.last.map { String(format: "最新 %.2f%%", $0.rate) } ?? "")
+    .accessibilityValue(samples.last.map { String(format: "最新 %.2f%%", $0.rate) } ?? "")
   }
 
   private func dayText(_ date: Date?) -> String {

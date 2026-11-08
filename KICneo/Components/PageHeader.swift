@@ -44,14 +44,21 @@ struct KICneoHeader: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   /// 文字サイズ（largeTitle 相当）。文字サイズの設定に追従する。
   @ScaledMetric(relativeTo: .largeTitle) private var fontSize: CGFloat = 34
+  /// 起動画面から文字が飛んでくる先として、文字の位置を知らせる（起動画面が重なっている間は隠す）
+  @Environment(\.brandAnchors) private var anchors
+  @State private var kicFrame: CGRect = .zero
+  @State private var neoFrame: CGRect = .zero
 
   var body: some View {
     HStack(alignment: .bottom, spacing: 0) {
       word(.kic, color: AppTheme.textPrimary)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { kicFrame = $0; report() }
         .modifier(Entrance(shown: shown, delay: 0, reduceMotion: reduceMotion))
       word(.neo, color: AppTheme.primaryAction)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { neoFrame = $0; report() }
         .modifier(Entrance(shown: shown, delay: 0.12, reduceMotion: reduceMotion))
     }
+    .opacity(anchors.hideHeader ? 0 : 1)
     .padding(.vertical, 4)
     .frame(maxWidth: .infinity, alignment: .leading)
     .accessibilityElement(children: .ignore)
@@ -59,7 +66,15 @@ struct KICneoHeader: View {
     .accessibilityAddTraits(.isHeader)
     .onAppear { shown = true }
     // 次に画面へ戻ってきたとき、もう一度動くように戻しておく
-    .onDisappear { shown = false }
+    .onDisappear {
+      shown = false
+      anchors.store?.header = nil
+    }
+  }
+
+  private func report() {
+    guard kicFrame != .zero, neoFrame != .zero else { return }
+    anchors.store?.header = (kicFrame, neoFrame)
   }
 
   private func word(_ word: BrandWordShape.Word, color: Color) -> some View {

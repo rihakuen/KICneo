@@ -212,50 +212,81 @@ actor SchoolClient {
   // MARK: 学校からのお知らせ
 
   /// 今開いているお知らせの詳細ページ（添付のダウンロードは、このページのフォームから送る）
-  private var noticePage: (target: String, html: String, url: URL?)?
+  private var noticePage: (key: String, html: String, url: URL?)?
+  /// 掲示板の分類ごとの一覧のページ（詳細を開く postback は、このページのフォームから送る）
+  private var noticeLists: [String: (html: String, url: URL)] = [:]
 
-  /// トップページの「未読のお知らせ／授業関連／連絡事項」。トップページを1回読み直すだけ（軽い通信）。
+  /// 掲示板の分類（番号 → 名前）。ポータルの PC 版の掲示板のページ（information/Personal.aspx?cat=）
+  nonisolated static let noticeCategories: [(code: String, name: String)] = [
+    ("01", "連絡・スケジュール"), ("02", "事務局窓口・奨学金"), ("03", "学科からのお知らせ"),
+    ("04", "キャリアセンター"), ("99", "システム管理者からのお知らせ")
+  ]
+
+  private func noticeListURL(_ code: String) -> URL {
+    var components = URLComponents(url: base.deletingLastPathComponent().appendingPathComponent("information/Personal.aspx"),
+                                   resolvingAgainstBaseURL: false)!
+    components.queryItems = [URLQueryItem(name: "cat", value: code)]
+    return components.url!
+  }
+
+  /// 掲示板の全分類の、掲載中のお知らせ（既読のものも含む）。分類ごとに一覧のページを1回ずつ読む。
   func schoolNotices(retryWith credentials: (id: String, password: String)? = nil) async throws -> [SchoolNotice] {
     do {
-      return try await withPageLock { try await reloadTopNotices() }
+      return try await withPageLock { try await loadNoticeLists() }
     } catch SchoolError.notLoggedIn {
       guard let credentials else { throw SchoolError.notLoggedIn }
       try await relogin(credentials)
-      return try Self.parseNotices(topHTML)
+      return try await withPageLock { try await loadNoticeLists() }
     }
   }
 
-  private func reloadTopNotices() async throws -> [SchoolNotice] {
-    let (data, _) = try await session.data(from: base.appendingPathComponent("TopSP.aspx"))
-    let html = String(decoding: data, as: UTF8.self)
-    guard !Self.isLoginPage(html) else { throw SchoolError.notLoggedIn }
-    topHTML = html
-    topFields = try Self.hiddenFields(SwiftSoup.parse(html))
-    return try Self.parseNotices(html)
+  private func loadNoticeLists() async throws -> [SchoolNotice] {
+    var all: [SchoolNotice] = []
+    for category in Self.noticeCategories {
+      let url = noticeListURL(category.code)
+      let (data, response) = try await session.data(from: url)
+      let html = String(decoding: data, as: UTF8.self)
+      guard !Self.isLoginPage(html) else { throw SchoolError.notLoggedIn }
+      noticeLists[category.code] = (html, response.url ?? url)
+      all += try Self.parseNoticeList(html, code: category.code, name: category.name)
+    }
+    return all
   }
 
-  /// お知らせの詳細を開く（学校側ではこれで既読になる）。
+  /// お知らせの詳細を開く（学校側でも既読になる）。
   func noticeDetail(_ notice: SchoolNotice,
                     retryWith credentials: (id: String, password: String)? = nil) async throws -> SchoolNoticeDetail {
-    guard let target = notice.eventTarget else { throw SchoolError.parseFailed }
     do {
-      return try await withPageLock { try await openNotice(target, key: notice.key) }
+      return try await withPageLock { try await openNotice(notice) }
     } catch SchoolError.notLoggedIn {
       guard let credentials else { throw SchoolError.notLoggedIn }
       try await relogin(credentials)
-      return try await withPageLock { try await openNotice(target, key: notice.key) }
+      noticeLists = [:]
+      return try await withPageLock { try await openNotice(notice) }
     }
   }
 
-  private func openNotice(_ target: String, key: String) async throws -> SchoolNoticeDetail {
-    guard !topFields.isEmpty else { throw SchoolError.notLoggedIn }
-    var f = topFields
+  private func openNotice(_ notice: SchoolNotice) async throws -> SchoolNoticeDetail {
+    guard let target = notice.eventTarget, let code = notice.listCategory else { throw SchoolError.parseFailed }
+    // 一覧のページを持っていなければ開き直す（行の番号は一覧の並びのまま）
+    if noticeLists[code] == nil {
+      let url = noticeListURL(code)
+      let (data, response) = try await session.data(from: url)
+      let html = String(decoding: data, as: UTF8.self)
+      guard !Self.isLoginPage(html) else { throw SchoolError.notLoggedIn }
+      noticeLists[code] = (html, response.url ?? url)
+    }
+    guard let list = noticeLists[code] else { throw SchoolError.parseFailed }
+    let doc = try SwiftSoup.parse(list.html)
+    var f = try Self.hiddenFields(doc)
     f["__EVENTTARGET"] = target
     f["__EVENTARGUMENT"] = ""
-    let page = try await post(base.appendingPathComponent("TopSP.aspx"), f)
+    let action = try doc.select("form").first()?.attr("action") ?? ""
+    let url = action.isEmpty ? list.url : (URL(string: action, relativeTo: list.url)?.absoluteURL ?? list.url)
+    let page = try await post(url, f)
     guard !Self.isLoginPage(page.html) else { throw SchoolError.notLoggedIn }
-    let detail = try await Self.parseNoticeDetail(page.html, key: key)
-    noticePage = (target, page.html, page.url)
+    let detail = try await Self.parseNoticeDetail(page.html, key: notice.key)
+    noticePage = (notice.key, page.html, page.url ?? url)
     return detail
   }
 
@@ -275,16 +306,15 @@ actor SchoolClient {
   private func downloadNoticeAttachment(_ attachment: SchoolNoticeDetail.Attachment,
                                         of notice: SchoolNotice) async throws -> Data {
     // 別のお知らせの詳細を開いている（またはまだ開いていない）ときは、先にこのお知らせを開き直す
-    if noticePage?.target != notice.eventTarget {
-      guard let target = notice.eventTarget else { throw SchoolError.parseFailed }
-      _ = try await openNotice(target, key: notice.key)
+    if noticePage?.key != notice.key {
+      _ = try await openNotice(notice)
     }
     guard let page = noticePage else { throw SchoolError.parseFailed }
     let doc = try SwiftSoup.parse(page.html)
     var f = try Self.hiddenFields(doc)
     f["__EVENTTARGET"] = attachment.eventTarget
     f["__EVENTARGUMENT"] = ""
-    let pageURL = page.url ?? base.appendingPathComponent("TopSP.aspx")
+    let pageURL = page.url ?? noticeListURL(notice.listCategory ?? "01")
     let action = try doc.select("form").first()?.attr("action") ?? ""
     let url = action.isEmpty ? pageURL : (URL(string: action, relativeTo: pageURL)?.absoluteURL ?? pageURL)
     let (data, response) = try await postData(url, f)
@@ -916,32 +946,31 @@ actor SchoolClient {
     return String(href[range])
   }
 
-  /// トップページの「未読の○○」の表（gv_未読のお知らせ など）から、お知らせの一覧を読む。
-  nonisolated static func parseNotices(_ html: String) throws -> [SchoolNotice] {
+  /// 掲示板の一覧の表（gv_info）から、お知らせを読む。1行に タイトル・掲載者・掲載開始日・掲載終了日・未読処理。
+  nonisolated static func parseNoticeList(_ html: String, code: String, name: String) throws -> [SchoolNotice] {
     let doc = try SwiftSoup.parse(html)
     func text(_ row: Element, _ suffix: String) -> String {
       guard let element = try? row.select("[id$=\(suffix)]").first(), let value = try? element.text() else { return "" }
       return value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     var notices: [SchoolNotice] = []
-    for table in try doc.select("table[id*=gv_未読]") {
-      let id = table.id()
-      let section = id.components(separatedBy: "gv_未読の").last ?? "お知らせ"
-      for link in try table.select("a[id$=_title]") {
-        guard let target = postbackTarget(try link.attr("href")) else { continue }
-        // 1件ぶんの枠（タイトルの行と、分類・日付・掲示者の行をまとめた行）
-        let parents = link.parents().array()
-        let row = parents.first { $0.hasClass("info_row") } ?? parents.first { $0.tagName() == "table" } ?? link
-        let title = try link.attr("title").isEmpty ? link.text() : link.attr("title")
-        notices.append(SchoolNotice(
-          section: section,
-          title: title.trimmingCharacters(in: .whitespacesAndNewlines),
-          category: text(row, "_lb_category"),
-          date: text(row, "_lbl_掲示開始日"),
-          poster: text(row, "掲示者"),
-          hasAttachment: (try? row.select("img[id$=_img_添付]").array().isEmpty) == false,
-          eventTarget: target))
-      }
+    for link in try doc.select("table[id*=gv_info] a[id$=_title]") {
+      guard let target = postbackTarget(try link.attr("href")) else { continue }
+      guard let row = link.parents().array().first(where: { $0.tagName() == "tr" }) else { continue }
+      let title = try link.text().trimmingCharacters(in: .whitespacesAndNewlines)
+      // 「既読にする」のリンクがあれば、学校側ではまだ未読
+      let readToggle = text(row, "_lb_未読処理")
+      notices.append(SchoolNotice(
+        section: name,
+        title: title,
+        category: name,
+        date: text(row, "_Label4"),
+        poster: text(row, "掲示者"),
+        hasAttachment: (try? row.select("img[id$=_img_添付]").array().isEmpty) == false,
+        eventTarget: target,
+        listCategory: code,
+        endDate: text(row, "_Label5"),
+        unreadOnServer: readToggle.contains("既読")))
     }
     return notices
   }

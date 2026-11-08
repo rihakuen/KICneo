@@ -11,11 +11,22 @@ struct ContentView: View {
   /// ただし前回の内容が端末に保存されていれば、それをすぐ表示できるのでローディングは出さない。
   @State private var startupDone = !KeychainService.hasSavedAccount || AccountCache.hasCache(AccountCache.attendance)
   @State private var selectedTab = 0
-  /// 起動時・ログイン直後に出す、アイコンのタイルの全画面。消えるときに拡大しながらフェードしてホームが見える
+  /// 起動時・ログイン直後に出す、アイコンのタイルの全画面（BrandSplashView）。
+  /// 消えるときは、タイルの「KIC」「neo」が次の画面のロゴの位置（ホームの見出し・ログイン画面のタイル）へ移っていく
   private enum Splash { case launch, afterLogin }
   @State private var splash: Splash? = .launch
+  @State private var splashPhase: BrandSplashView.Phase = .center
   /// 起動のタイルの入場（文字が出そろうまで）が終わったか。終わる前には消さない
   @State private var splashMinimumDone = false
+  /// ホームの見出し・ログイン画面のタイルの位置（子の画面が書き込む。再描画を起こさない入れ物）
+  @State private var brandAnchors = BrandAnchorStore()
+  /// 起動画面のタイルがログイン画面のタイルに重なっている間、ログイン画面のタイルを隠す
+  @State private var hidesLoginTile = false
+  /// ログインできたあとの全画面（色が広がる → KICneo → 読み込み → ホームへ）。nil のときは出さない
+  @State private var loginCover: BrandLoginCover.Phase?
+  /// ホームを作り直すための番号。ログインのたびに変え、カレンダー・出席率を「今日・今月（月間）」から始める
+  /// （アプリを終了して起動し直したときは、もともと今日・月間から始まる）
+  @State private var homeResetID = 0
 
   var body: some View {
     ZStack {
@@ -45,6 +56,7 @@ struct ContentView: View {
             },
             noticesSection: AnyView(SchoolNoticesCard(school: school))
           )
+          .id(homeResetID)
           .task { await school.loadTimetable() }
           .task(id: school.isLoggedIn) { await school.loadNotices() }
         }
@@ -66,23 +78,39 @@ struct ContentView: View {
         }
         .tabItem { Label("公欠・就職活動", systemImage: "doc.text") }.tag(2)
         NavigationStack {
-          SchoolServicesScreen(school: school) { showLogin = true }
+          SchoolServicesScreen(school: school) {
+            withAnimation(AppTheme.Motion.transition(reduce: reduceMotion)) { showLogin = true }
+          }
         }
         .tabItem { Label("個人情報", systemImage: "person.crop.circle") }.tag(3)
       }
       .tint(AppTheme.primaryAction)
       .onChange(of: selectedTab) { _, _ in AppHaptics.selection() }
-      .scaleEffect(splash == nil || reduceMotion ? 1 : 0.94)
+      // 起動画面がまだ中央にある間は、ホームを少し縮めておき、文字が見出しへ飛ぶのと一緒に広げる
+      .scaleEffect(!reduceMotion && ((splash != nil && splashPhase == .center)
+                                      || (loginCover.map { $0 >= .covered && $0 < .finishing } ?? false)) ? 0.94 : 1)
+
+      // ログイン画面（全画面の重ね）。ホームと同じ階層に置くと、ロゴの位置を起動画面の動きと共有できる
+      if showLogin {
+        SchoolLoginView(school: school) { finishLogin() }
+          .transition(.opacity)
+          .zIndex(5)
+      }
 
       if let splash {
-        StartupLoadingView(entrance: splash == .launch) {
+        BrandSplashView(phase: splashPhase, entrance: splash == .launch,
+                        loginTile: brandAnchors.loginTile, header: brandAnchors.header) {
           splashMinimumDone = true
           finishLaunchSplash()
         }
-          // 消えるとき：タイルごと拡大しながらフェードして、下のホームが広がって見える
-          .transition(.asymmetric(insertion: .identity,
-                                  removal: reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 1.6))))
-          .zIndex(10)
+        .allowsHitTesting(splashPhase == .center)
+        .zIndex(10)
+      }
+
+      if let loginCover {
+        BrandLoginCover(phase: loginCover, origin: brandAnchors.loginButton, header: brandAnchors.header)
+          .allowsHitTesting(loginCover < .finishing)
+          .zIndex(11)
       }
 
       if let message = viewModel.toastMessage {
@@ -109,10 +137,8 @@ struct ContentView: View {
       }
     }
     .animation(AppTheme.Motion.transition(reduce: reduceMotion), value: viewModel.toastMessage)
-    .fullScreenCover(isPresented: $showLogin) {
-      SchoolLoginView(school: school) { finishLogin() }
-        .interactiveDismissDisabled()
-    }
+    .environment(\.brandAnchors, BrandAnchors(store: brandAnchors, hideHeader: splash != nil || loginCover != nil,
+                                               hideLoginTile: hidesLoginTile))
     .onChange(of: startupDone) { _, _ in finishLaunchSplash() }
     .onChange(of: school.schoolEvents) { _, events in viewModel.schoolEvents = events }
     .task {
@@ -140,40 +166,78 @@ struct ContentView: View {
     }
   }
 
-  /// スプラッシュを消すときの動き（タイルが拡大して抜けていく）
+  /// ロゴが次の画面へ移る動き
   private var splashExit: Animation {
-    reduceMotion ? .easeOut(duration: 0.2) : .smooth(duration: 0.55)
+    reduceMotion ? .easeOut(duration: 0.2) : .smooth(duration: 0.6)
   }
 
-  /// 起動のスプラッシュを閉じる。最低限の時間が過ぎ、最初の表示の準備ができてから。
-  /// ログインが必要なら、ログイン画面をアニメーションなしで重ね（同じ背景なので切れ目が見えない）、その下でスプラッシュを外す。
-  private func finishLaunchSplash() {
-    guard splash == .launch, splashMinimumDone, startupDone else { return }
-    let needsLogin = !school.isLoggedIn && (!KeychainService.hasSavedAccount || school.credentialsRejected)
-    if needsLogin {
-      var transaction = Transaction()
-      transaction.disablesAnimations = true
-      withTransaction(transaction) {
-        showLogin = true
-        splash = nil
-      }
-    } else {
-      withAnimation(splashExit) { splash = nil }
-    }
-  }
+  private var splashExitDuration: Duration { .milliseconds(reduceMotion ? 220 : 650) }
 
-  /// ログインできたとき：ログイン画面をアニメーションなしで閉じ、下に出しておいたタイルの画面を
-  /// 少し見せてから拡大して消す（起動時と同じ動きでホームに入る）。
-  private func finishLogin() {
+  private func withoutAnimation(_ body: () -> Void) {
     var transaction = Transaction()
     transaction.disablesAnimations = true
-    withTransaction(transaction) {
-      splash = .afterLogin
-      showLogin = false
+    withTransaction(transaction, body)
+  }
+
+  /// 起動画面を閉じる。入場が終わり、最初の表示の準備ができてから。
+  /// - ログインが必要：ログイン画面を下に出し、タイルをログイン画面のタイルの位置へ移す（背景は消えて下が見える）
+  /// - ログイン済み：タイルの「KIC」「neo」をホームの見出しの位置へ飛ばし、ホームを広げる
+  private func finishLaunchSplash() {
+    guard splash == .launch, splashPhase == .center, splashMinimumDone, startupDone else { return }
+    let needsLogin = !school.isLoggedIn && (!KeychainService.hasSavedAccount || school.credentialsRejected)
+    if needsLogin {
+      withoutAnimation {
+        showLogin = true
+        hidesLoginTile = true
+      }
+      Task {
+        // ログイン画面が並んでタイルの位置がわかるまで、少し待つ
+        try? await Task.sleep(for: .milliseconds(60))
+        withAnimation(splashExit) { splashPhase = .loginTile }
+        try? await Task.sleep(for: splashExitDuration)
+        withoutAnimation {
+          splash = nil
+          splashPhase = .center
+          hidesLoginTile = false
+        }
+      }
+    } else {
+      withAnimation(splashExit) { splashPhase = .header }
+      Task {
+        try? await Task.sleep(for: splashExitDuration)
+        withoutAnimation {
+          splash = nil
+          splashPhase = .center
+        }
+      }
     }
+  }
+
+  /// ログインできたとき：ログインボタンから色を広げて画面を覆い、その下でログイン画面を閉じてホームのタブへ切り替える。
+  /// 「KICneo」を左から出して読み込みの画面を（押してから）最低 5 秒見せ、最後に色を見出しへ吸い込ませてホームに入る。
+  private func finishLogin() {
+    let started = ContinuousClock.now
+    withoutAnimation { loginCover = .start }
     Task {
-      try? await Task.sleep(for: .milliseconds(reduceMotion ? 150 : 450))
-      withAnimation(splashExit) { splash = nil }
+      try? await Task.sleep(for: .milliseconds(20))
+      AppHaptics.light()
+      withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .easeInOut(duration: 0.6)) { loginCover = .covered }
+      try? await Task.sleep(for: .milliseconds(reduceMotion ? 220 : 620))
+      // 色の下で、ログイン画面を閉じてホームへ
+      withoutAnimation {
+        showLogin = false
+        selectedTab = 0
+        homeResetID += 1
+      }
+      withAnimation(.smooth(duration: 0.5)) { loginCover = .title }
+      try? await Task.sleep(for: .milliseconds(reduceMotion ? 200 : 750))
+      withAnimation(.smooth(duration: 0.4)) { loginCover = .loading }
+      // 押してから最低 5 秒は、この画面を見せる（その間にホームの見出しの位置も決まる）
+      try? await Task.sleep(until: started + .seconds(5), clock: .continuous)
+      AppHaptics.success()
+      withAnimation(reduceMotion ? .easeOut(duration: 0.25) : .smooth(duration: 0.75)) { loginCover = .finishing }
+      try? await Task.sleep(for: .milliseconds(reduceMotion ? 280 : 800))
+      withoutAnimation { loginCover = nil }
     }
   }
 }

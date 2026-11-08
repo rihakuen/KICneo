@@ -36,28 +36,23 @@ struct PageHeader: View {
     .background(AppTheme.background)
 }
 
-/// ホーム最上部の「KICneo」。「KIC」は太字、「neo」は独自の幾何学的な字形（NeoWordmark）で、
-/// 中をゆっくり流れる青のグラデーション（MeshGradient を字形で切り抜いたもの）と細かい粒子で塗る。
-/// 画面に出るたびに「KIC」→「neo」の順で浮かび上がる。動きを減らす設定では、流れも入場もフェードだけにする。
+/// ホーム最上部の「KICneo」。アプリアイコンと同じ字形（Montserrat をパスにした BrandGlyphs）で、
+/// 「KIC」は文字色、「neo」はアプリの青の単色。画面に出るたびに「KIC」→「neo」の順で浮かび上がる。
+/// 動きを減らす設定では、入場はフェードだけにする。
 struct KICneoHeader: View {
   @State private var shown = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  /// 「neo」の高さ。「KIC」（largeTitle・heavy）の大文字の高さに合わせ、文字サイズの設定に追従する。
-  @ScaledMetric(relativeTo: .largeTitle) private var neoHeight: CGFloat = 25
+  /// 文字サイズ（largeTitle 相当）。文字サイズの設定に追従する。
+  @ScaledMetric(relativeTo: .largeTitle) private var fontSize: CGFloat = 34
 
   var body: some View {
-    HStack(alignment: .firstTextBaseline, spacing: neoHeight * 0.18) {
-      Text("KIC")
-        .font(.largeTitle.weight(.heavy))
-        .foregroundStyle(AppTheme.textPrimary)
+    HStack(alignment: .bottom, spacing: 0) {
+      word(.kic, color: AppTheme.textPrimary)
         .modifier(Entrance(shown: shown, delay: 0, reduceMotion: reduceMotion))
-      FluidFill(animated: !reduceMotion)
-        .mask(NeoWordmark())
-        .frame(width: neoHeight * NeoWordmark.aspectRatio, height: neoHeight)
-        // 字形の下端を「KIC」の文字の下端（ベースライン）にそろえる
-        .alignmentGuide(.firstTextBaseline) { $0[.bottom] }
+      word(.neo, color: AppTheme.primaryAction)
         .modifier(Entrance(shown: shown, delay: 0.12, reduceMotion: reduceMotion))
     }
+    .padding(.vertical, 4)
     .frame(maxWidth: .infinity, alignment: .leading)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel("KICneo")
@@ -65,6 +60,11 @@ struct KICneoHeader: View {
     .onAppear { shown = true }
     // 次に画面へ戻ってきたとき、もう一度動くように戻しておく
     .onDisappear { shown = false }
+  }
+
+  private func word(_ word: BrandWordShape.Word, color: Color) -> some View {
+    let size = BrandWordShape.size(word, fontSize: fontSize)
+    return BrandWordShape(word: word).fill(color).frame(width: size.width, height: size.height)
   }
 
   private struct Entrance: ViewModifier {

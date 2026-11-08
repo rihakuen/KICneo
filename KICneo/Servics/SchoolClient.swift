@@ -98,6 +98,12 @@ actor SchoolClient {
 
   /// HTML と、（リダイレクト後の）応答の URL を返す。フォームの相対的な action はこの URL を基準にする。
   private func post(_ url: URL, _ fields: [String: String]) async throws -> (html: String, url: URL?) {
+    let (data, response) = try await postData(url, fields)
+    return (String(decoding: data, as: UTF8.self), response.url)
+  }
+
+  /// フォームを送り、応答をそのまま返す（添付ファイルのように HTML でない応答を受け取るとき用）。
+  private func postData(_ url: URL, _ fields: [String: String]) async throws -> (Data, URLResponse) {
     var req = URLRequest(url: url)
     req.httpMethod = "POST"
     req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
@@ -107,8 +113,7 @@ actor SchoolClient {
       "\(k.addingPercentEncoding(withAllowedCharacters: ok)!)="
         + "\(v.addingPercentEncoding(withAllowedCharacters: ok)!)"
     }.joined(separator: "&").data(using: .utf8)
-    let (data, response) = try await session.data(for: req)
-    return (String(decoding: data, as: UTF8.self), response.url)
+    return try await session.data(for: req)
   }
 
   /// __doPostBack の再現：トップページの hidden 項目をすべて付けて POST する。
@@ -186,13 +191,115 @@ actor SchoolClient {
   /// 学生カルテのページから氏名・学籍番号などを読む。Session 切れのときは `attendance` と同じく再ログインしてやり直す。
   func studentCard(retryWith credentials: (id: String, password: String)? = nil) async throws -> StudentCardData {
     do {
-      let page = try await menu(Menu.studentCard)
+      let page = try await menu(studentCardArgument)
       return try await Self.parseStudentCard(page.html)
     } catch SchoolError.parseFailed, SchoolError.notLoggedIn {
       guard let credentials else { throw SchoolError.parseFailed }
       try await relogin(credentials)
-      return try await Self.parseStudentCard(await menu(Menu.studentCard).html)
+      return try await Self.parseStudentCard(await menu(studentCardArgument).html)
     }
+  }
+
+  /// 学生カルテのメニューの引数。学科・学年によってメニューの番号が違うことがあるので、
+  /// まずトップページのリンクの文字から探し、見つからなければ決め打ちの番号を使う。
+  private var studentCardArgument: String {
+    for title in ["学生カルテ", "カルテ", "学籍情報", "学生情報"] {
+      if let found = Self.menuArgument(in: topHTML, titled: title) { return found }
+    }
+    return Menu.studentCard
+  }
+
+  // MARK: 学校からのお知らせ
+
+  /// 今開いているお知らせの詳細ページ（添付のダウンロードは、このページのフォームから送る）
+  private var noticePage: (target: String, html: String, url: URL?)?
+
+  /// トップページの「未読のお知らせ／授業関連／連絡事項」。トップページを1回読み直すだけ（軽い通信）。
+  func schoolNotices(retryWith credentials: (id: String, password: String)? = nil) async throws -> [SchoolNotice] {
+    do {
+      return try await withPageLock { try await reloadTopNotices() }
+    } catch SchoolError.notLoggedIn {
+      guard let credentials else { throw SchoolError.notLoggedIn }
+      try await relogin(credentials)
+      return try Self.parseNotices(topHTML)
+    }
+  }
+
+  private func reloadTopNotices() async throws -> [SchoolNotice] {
+    let (data, _) = try await session.data(from: base.appendingPathComponent("TopSP.aspx"))
+    let html = String(decoding: data, as: UTF8.self)
+    guard !Self.isLoginPage(html) else { throw SchoolError.notLoggedIn }
+    topHTML = html
+    topFields = try Self.hiddenFields(SwiftSoup.parse(html))
+    return try Self.parseNotices(html)
+  }
+
+  /// お知らせの詳細を開く（学校側ではこれで既読になる）。
+  func noticeDetail(_ notice: SchoolNotice,
+                    retryWith credentials: (id: String, password: String)? = nil) async throws -> SchoolNoticeDetail {
+    guard let target = notice.eventTarget else { throw SchoolError.parseFailed }
+    do {
+      return try await withPageLock { try await openNotice(target, key: notice.key) }
+    } catch SchoolError.notLoggedIn {
+      guard let credentials else { throw SchoolError.notLoggedIn }
+      try await relogin(credentials)
+      return try await withPageLock { try await openNotice(target, key: notice.key) }
+    }
+  }
+
+  private func openNotice(_ target: String, key: String) async throws -> SchoolNoticeDetail {
+    guard !topFields.isEmpty else { throw SchoolError.notLoggedIn }
+    var f = topFields
+    f["__EVENTTARGET"] = target
+    f["__EVENTARGUMENT"] = ""
+    let page = try await post(base.appendingPathComponent("TopSP.aspx"), f)
+    guard !Self.isLoginPage(page.html) else { throw SchoolError.notLoggedIn }
+    let detail = try await Self.parseNoticeDetail(page.html, key: key)
+    noticePage = (target, page.html, page.url)
+    return detail
+  }
+
+  /// お知らせの添付ファイル。詳細ページの添付名のリンク（postback）を送り、返ってきたファイルを返す。
+  func noticeAttachment(_ attachment: SchoolNoticeDetail.Attachment, of notice: SchoolNotice,
+                        retryWith credentials: (id: String, password: String)? = nil) async throws -> Data {
+    do {
+      return try await withPageLock { try await downloadNoticeAttachment(attachment, of: notice) }
+    } catch SchoolError.notLoggedIn {
+      guard let credentials else { throw SchoolError.notLoggedIn }
+      try await relogin(credentials)
+      noticePage = nil
+      return try await withPageLock { try await downloadNoticeAttachment(attachment, of: notice) }
+    }
+  }
+
+  private func downloadNoticeAttachment(_ attachment: SchoolNoticeDetail.Attachment,
+                                        of notice: SchoolNotice) async throws -> Data {
+    // 別のお知らせの詳細を開いている（またはまだ開いていない）ときは、先にこのお知らせを開き直す
+    if noticePage?.target != notice.eventTarget {
+      guard let target = notice.eventTarget else { throw SchoolError.parseFailed }
+      _ = try await openNotice(target, key: notice.key)
+    }
+    guard let page = noticePage else { throw SchoolError.parseFailed }
+    let doc = try SwiftSoup.parse(page.html)
+    var f = try Self.hiddenFields(doc)
+    f["__EVENTTARGET"] = attachment.eventTarget
+    f["__EVENTARGUMENT"] = ""
+    let pageURL = page.url ?? base.appendingPathComponent("TopSP.aspx")
+    let action = try doc.select("form").first()?.attr("action") ?? ""
+    let url = action.isEmpty ? pageURL : (URL(string: action, relativeTo: pageURL)?.absoluteURL ?? pageURL)
+    let (data, response) = try await postData(url, f)
+    let type = ((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+    #if DEBUG
+    print("[School] お知らせの添付 \(type) \(data.count / 1000)KB")
+    #endif
+    guard type.contains("text/html") else { return data }
+    // HTML が返ってきたとき：ログインページなら Session 切れ。ファイルへのリンクや移動先が書いてあれば、そこから取る
+    let html = String(decoding: data, as: UTF8.self)
+    guard !Self.isLoginPage(html) else { throw SchoolError.notLoggedIn }
+    if let file = Self.fileLink(in: html, relativeTo: response.url ?? url) {
+      return try await fetchAttachment(file)
+    }
+    throw SchoolError.parseFailed
   }
 
   /// 「成績」ページの全科目。Session 切れのときは `credentials` で再ログインして1回だけやり直す。
@@ -713,12 +820,27 @@ actor SchoolClient {
     func clean(_ t: String) -> String {
       t.replacingOccurrences(of: "\u{3000}", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
     }
+    /// 見出しの比較用：全角の英数字（「ＮＯ」など）を半角にし、大文字にそろえ、空白を除く。
+    /// 「学生NO」「学生No」「学生ＮＯ」「学籍 番号」のような表記ゆれでも同じ項目として扱うため。
+    func normalized(_ label: String) -> String {
+      label.precomposedStringWithCompatibilityMapping.uppercased()
+        .filter { !$0.isWhitespace && $0 != ":" && $0 != "：" }
+    }
     func isName(_ label: String) -> Bool {
-      label.contains("氏名") && !label.contains("カナ") && !label.contains("フリガナ") && !label.contains("ふりがな")
+      let l = normalized(label)
+      return (l.contains("氏名") || l == "名前" || l == "学生名")
+        && !l.contains("カナ") && !l.contains("フリガナ") && !l.contains("ふりがな") && !l.contains("ローマ")
     }
+    /// 学籍番号の見出し。「学籍番号」「学籍NO」を優先する。
+    /// 「学生NO」はクラスの中の出席番号（2桁ほど）のことがあるので、学籍番号が無いときだけ使う。
     func isNumber(_ label: String) -> Bool {
-      ["学籍番号", "学生番号", "学籍No", "学生No"].contains { label.contains($0) }
+      let l = normalized(label)
+      return ["学籍番号", "学生番号", "学籍NO"].contains { l.contains($0) }
     }
+    func isWeakNumber(_ label: String) -> Bool {
+      normalized(label).contains("学生NO")
+    }
+    var weakNumber: String?
     func isDepartment(_ label: String) -> Bool {
       label.contains("学科") && !label.contains("コード")
     }
@@ -740,6 +862,8 @@ actor SchoolClient {
       }
       if number == nil, isNumber(label) {
         number = v
+      } else if weakNumber == nil, isWeakNumber(label) {
+        weakNumber = v
       }
       if department == nil, isDepartment(label), !isDepartment(v) {
         department = v
@@ -770,6 +894,7 @@ actor SchoolClient {
         try take("学科", e.text())
       }
     }
+    if number == nil { number = weakNumber }
     guard let name, let number else {
       #if DEBUG
       // th の見出しと id だけを出す（個人のデータの値は出さない）。ページの構造の確認用。
@@ -781,6 +906,130 @@ actor SchoolClient {
     }
     return StudentCardData(displayName: name, studentNumber: number, department: fields["学科"] ?? department,
       fields: fields)
+  }
+
+  /// postback のリンクの対象（`__doPostBack('対象','')` の「対象」）
+  nonisolated static func postbackTarget(_ href: String) -> String? {
+    guard let regex = try? NSRegularExpression(pattern: #"__doPostBack\(\s*'([^']+)'"#),
+          let match = regex.firstMatch(in: href, range: NSRange(href.startIndex..., in: href)),
+          let range = Range(match.range(at: 1), in: href) else { return nil }
+    return String(href[range])
+  }
+
+  /// トップページの「未読の○○」の表（gv_未読のお知らせ など）から、お知らせの一覧を読む。
+  nonisolated static func parseNotices(_ html: String) throws -> [SchoolNotice] {
+    let doc = try SwiftSoup.parse(html)
+    func text(_ row: Element, _ suffix: String) -> String {
+      guard let element = try? row.select("[id$=\(suffix)]").first(), let value = try? element.text() else { return "" }
+      return value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    var notices: [SchoolNotice] = []
+    for table in try doc.select("table[id*=gv_未読]") {
+      let id = table.id()
+      let section = id.components(separatedBy: "gv_未読の").last ?? "お知らせ"
+      for link in try table.select("a[id$=_title]") {
+        guard let target = postbackTarget(try link.attr("href")) else { continue }
+        // 1件ぶんの枠（タイトルの行と、分類・日付・掲示者の行をまとめた行）
+        let parents = link.parents().array()
+        let row = parents.first { $0.hasClass("info_row") } ?? parents.first { $0.tagName() == "table" } ?? link
+        let title = try link.attr("title").isEmpty ? link.text() : link.attr("title")
+        notices.append(SchoolNotice(
+          section: section,
+          title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+          category: text(row, "_lb_category"),
+          date: text(row, "_lbl_掲示開始日"),
+          poster: text(row, "掲示者"),
+          hasAttachment: (try? row.select("img[id$=_img_添付]").array().isEmpty) == false,
+          eventTarget: target))
+      }
+    }
+    return notices
+  }
+
+  /// お知らせの詳細（「掲示内容」）。見出し（掲載者・掲載開始日・…）の次にある値を読む。
+  /// 詳細の本文は改行を残す。添付は「添付名」のリンク（postback）。
+  @concurrent
+  static func parseNoticeDetail(_ html: String, key: String) async throws -> SchoolNoticeDetail {
+    let doc = try SwiftSoup.parse(html)
+    let headings: Set<String> = ["掲示内容", "掲載者", "掲示者", "掲載開始日", "掲示開始日", "掲載終了日", "掲示終了日",
+                                 "タイトル", "詳細", "内容", "添付ファイル"]
+    // frm_info の中の文字の要素（見出しと値が交互に並ぶ）。無ければページ全体の span から探す
+    var spans = try doc.select("[id*=frm_info] span").array()
+    if spans.isEmpty { spans = try doc.select("span[id]").array() }
+    var values: [String: String] = [:]
+    var index = 0
+    while index < spans.count {
+      let label = try spans[index].text().trimmingCharacters(in: .whitespacesAndNewlines)
+      if headings.contains(label), index + 1 < spans.count {
+        let next = spans[index + 1]
+        let nextText = try next.text().trimmingCharacters(in: .whitespacesAndNewlines)
+        if !headings.contains(nextText) {
+          values[label] = label == "詳細" || label == "内容" ? multilineText(next) : nextText
+          index += 2
+          continue
+        }
+      }
+      index += 1
+    }
+    let title = values["タイトル"] ?? ""
+    guard !title.isEmpty || values["詳細"] != nil else {
+      #if DEBUG
+      let ids = (try? doc.select("[id]").array().map { $0.id() }.filter { !$0.hasPrefix("__") }) ?? []
+      print("[School] お知らせの詳細を読み取れませんでした。ids: \(ids.prefix(60))")
+      #endif
+      throw SchoolError.parseFailed
+    }
+    let attachments = try doc.select("a[id*=添付][href*=__doPostBack]").array().compactMap { link -> SchoolNoticeDetail.Attachment? in
+      guard let target = postbackTarget(try link.attr("href")) else { return nil }
+      let name = try link.text().trimmingCharacters(in: .whitespacesAndNewlines)
+      return name.isEmpty ? nil : SchoolNoticeDetail.Attachment(name: name, eventTarget: target)
+    }
+    return SchoolNoticeDetail(
+      key: key,
+      poster: values["掲載者"] ?? values["掲示者"] ?? "",
+      startDate: values["掲載開始日"] ?? values["掲示開始日"] ?? "",
+      endDate: values["掲載終了日"] ?? values["掲示終了日"] ?? "",
+      title: title,
+      body: values["詳細"] ?? values["内容"] ?? "",
+      attachments: attachments)
+  }
+
+  /// 要素の文字を、<br> や段落の区切りを改行にして取り出す（SwiftSoup の text() は改行をつぶすため）
+  nonisolated static func multilineText(_ element: Element) -> String {
+    var out = ""
+    func walk(_ node: Node) {
+      if let text = node as? TextNode {
+        out += text.getWholeText().replacingOccurrences(of: "\n", with: " ")
+      } else if let el = node as? Element {
+        let tag = el.tagName()
+        if tag == "br" { out += "\n"; return }
+        let block = ["p", "div", "li", "tr"].contains(tag)
+        if block, !out.isEmpty, !out.hasSuffix("\n") { out += "\n" }
+        for child in el.getChildNodes() { walk(child) }
+        if block, !out.hasSuffix("\n") { out += "\n" }
+      }
+    }
+    walk(element)
+    // 行ごとの前後の空白を除き、3行以上の空行は2行にまとめる
+    let lines = out.replacingOccurrences(of: "\u{00A0}", with: " ").components(separatedBy: "\n")
+      .map { $0.trimmingCharacters(in: .whitespaces) }
+    var result: [String] = []
+    for line in lines where !(line.isEmpty && (result.last?.isEmpty ?? true)) { result.append(line) }
+    return result.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  /// 添付のリンクを押したとき、ファイルではなく HTML が返ってきた場合に、その中のファイルへのリンク・移動先を探す
+  nonisolated static func fileLink(in html: String, relativeTo base: URL) -> URL? {
+    let patterns = [#"(?:window\.open|location\.href\s*=|location\.replace)\(?\s*['"]([^'"]+)['"]"#,
+                    #"href=['"]([^'"]+\.(?:jpe?g|png|gif|pdf|docx?|xlsx?|pptx?|zip))['"]"#]
+    for pattern in patterns {
+      guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+            let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+            let range = Range(match.range(at: 1), in: html) else { continue }
+      let raw = String(html[range]).replacingOccurrences(of: "&amp;", with: "&")
+      if let url = URL(string: raw, relativeTo: base)?.absoluteURL { return url }
+    }
+    return nil
   }
 
   /// トップページのメニューで、文字が `title` のリンクの `__doPostBack('…','引数')` の引数を返す。

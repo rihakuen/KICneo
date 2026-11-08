@@ -3,10 +3,7 @@ import SwiftUI
 struct BrowseEventsView: View {
   @ObservedObject var viewModel: EventViewModel
   @ObservedObject var school: SchoolViewModel
-  @Binding var showInterestSheet: Bool
   var onRefresh: () async -> Void
-  @Binding var showGraduationSettings: Bool
-  @Binding var showEndJobHuntingConfirm: Bool
   // プレビューでは学校への通信も、データの変更も行わない。
   var previewOnly = false
   var previewActionID: Int? = nil
@@ -19,8 +16,7 @@ struct BrowseEventsView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 24) {
-        DashboardHeaderView(viewModel: viewModel)
+      VStack(alignment: .leading, spacing: AppTheme.Space.cardGap) {
         Picker("表示", selection: $viewModel.selectedStatusFilter) {
           Text("すべて").tag(Optional<EventStatusFilter>.none)
           Text("気になる").tag(Optional(EventStatusFilter.saved))
@@ -28,12 +24,8 @@ struct BrowseEventsView: View {
         }
         .pickerStyle(.segmented)
         .accessibilityLabel("説明会の絞り込み")
-        if let tag = viewModel.selectedTagFilter {
-          HStack {
-            Text(tag).font(.subheadline)
-            Spacer()
-            Button("解除") { viewModel.selectedTagFilter = nil }
-          }
+        if !viewModel.availableTags.isEmpty {
+          tagFilter
         }
         if viewModel.displayEvents.isEmpty, school.schoolEventsLoadFailed {
           ConnectionNotice(text: "学校の説明会一覧を取得できませんでした。下に引いて再読み込みしてください。")
@@ -52,7 +44,6 @@ struct BrowseEventsView: View {
     .autocorrectionDisabled()
     .tint(AppTheme.primaryAction)
     .refreshable { if !previewOnly { await onRefresh() } }
-    .toolbar { ToolbarItem(placement: .topBarTrailing) { optionsMenu } }
     // 一覧が変わって、広げていた説明会が見えなくなったら閉じる
     .onChange(of: viewModel.filteredEvents.map(\.id)) { _, ids in
       if let expandedEventID, !ids.contains(expandedEventID) { self.expandedEventID = nil }
@@ -118,26 +109,38 @@ struct BrowseEventsView: View {
     viewModel.toggleSaved(event)
   }
 
-  private var optionsMenu: some View {
-    Menu {
-      if !viewModel.availableTags.isEmpty {
-        Menu("種類で絞り込む") {
-          Button("すべて") { viewModel.selectedTagFilter = nil }
-          ForEach(viewModel.availableTags, id: \.self) { tag in
-            Button { viewModel.selectedTagFilter = tag } label: {
-              if viewModel.selectedTagFilter == tag { Label(tag, systemImage: "checkmark") }
-              else { Text(tag) }
-            }
+  /// 種類（形式）のチップ。もう一度押すと解除。ホームの内訳のチップと同じ見た目
+  private var tagFilter: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: AppTheme.Space.sm) {
+        tagChip("すべて", selected: viewModel.selectedTagFilter == nil) { viewModel.selectedTagFilter = nil }
+        ForEach(viewModel.availableTags, id: \.self) { tag in
+          tagChip(tag, selected: viewModel.selectedTagFilter == tag) {
+            viewModel.selectedTagFilter = viewModel.selectedTagFilter == tag ? nil : tag
           }
         }
       }
-      Button("関心タグ", systemImage: "tag") { showInterestSheet = true }
-      Button("卒業日を設定", systemImage: "calendar") { showGraduationSettings = true }
-      Divider()
-      Button("就活を終了", systemImage: "checkmark.circle") { showEndJobHuntingConfirm = true }
-    } label: {
-      Image(systemName: "ellipsis").accessibilityLabel("表示と設定")
     }
+    .scrollClipDisabled()
+    .accessibilityLabel("種類で絞り込む")
+  }
+
+  private func tagChip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+    Button {
+      AppHaptics.selection()
+      withAnimation(AppTheme.Motion.transition(reduce: reduceMotion)) { action() }
+    } label: {
+      Text(title)
+        .font(selected ? AppTheme.Typography.captionEmphasis : AppTheme.Typography.caption)
+        .foregroundStyle(selected ? AppTheme.primaryAction : AppTheme.textSecondary)
+        .padding(.horizontal, AppTheme.Space.md)
+        .frame(minHeight: 32)
+        .background(selected ? AppTheme.formatTagBackground : AppTheme.cardBackground, in: Capsule())
+        .overlay { Capsule().strokeBorder(selected ? AppTheme.primaryAction.opacity(0.35) : AppTheme.border.opacity(0.6), lineWidth: 0.5) }
+        .contentShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(selected ? .isSelected : [])
   }
 }
 
@@ -155,8 +158,8 @@ private struct EventScreenPreview: View {
   }
   var body: some View {
     NavigationStack {
-      BrowseEventsView(viewModel: viewModel, school: school, showInterestSheet: .constant(false),
-        onRefresh: {}, showGraduationSettings: .constant(false), showEndJobHuntingConfirm: .constant(false),
+      BrowseEventsView(viewModel: viewModel, school: school,
+        onRefresh: {},
         previewOnly: true, previewActionID: expanded ? viewModel.displayEvents.first?.id : nil,
         previewDetailID: showsDetails ? viewModel.displayEvents.first?.id : nil)
     }

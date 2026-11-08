@@ -14,6 +14,8 @@ nonisolated enum AccountCache {
   static let studentCard = "student_card"
   static let eventDetails = "event_details"
   static let grades = "grades"
+  static let notices = "school_notices"
+  static let noticeDetails = "school_notice_details"
 
   /// 最後にログインしたアカウント。起動直後（ログインが終わる前）に、そのアカウントの保存内容を先に表示するために使う。
   static var lastAccountID: String? {

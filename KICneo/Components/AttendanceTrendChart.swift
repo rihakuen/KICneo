@@ -146,21 +146,21 @@ struct AttendanceTrendChart: View {
     return Chart {
       ForEach(points) { point in
         AreaMark(
-          x: .value("日付", point.date, unit: .day),
+          x: .value("日付", point.date),
           yStart: .value("下限", lower),
           yEnd: .value("出席率", point.rate))
           .interpolationMethod(.monotone)
           .foregroundStyle(LinearGradient(colors: [tint.opacity(0.16), tint.opacity(0)], startPoint: .top, endPoint: .bottom))
-        LineMark(x: .value("日付", point.date, unit: .day), y: .value("出席率", point.rate))
+        LineMark(x: .value("日付", point.date), y: .value("出席率", point.rate))
           .interpolationMethod(.monotone)
           .foregroundStyle(tint)
           .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
       }
       if let selected {
-        RuleMark(x: .value("日付", selected.date, unit: .day))
+        RuleMark(x: .value("日付", selected.date))
           .foregroundStyle(tint.opacity(0.35))
           .lineStyle(StrokeStyle(lineWidth: 1))
-        PointMark(x: .value("日付", selected.date, unit: .day), y: .value("出席率", selected.rate))
+        PointMark(x: .value("日付", selected.date), y: .value("出席率", selected.rate))
           .symbol {
             Circle()
               .strokeBorder(tint, lineWidth: 2.5)
@@ -170,7 +170,17 @@ struct AttendanceTrendChart: View {
       }
     }
     .chartYScale(domain: lower...upper)
+    // 横軸は最初の記録の日〜最後の記録の日。日数が少なくても線が左右いっぱいに引かれる
+    // （日単位の目盛りにすると、点が各日の真ん中に置かれ、2〜3日分だと線が中央に短く寄ってしまう）
+    .chartXScale(domain: (points.first?.date ?? .now)...(points.last?.date ?? .now))
     .chartXAxis(.hidden)
+    // グラフの範囲がわかるよう、描画域を細い枠で囲む
+    .chartPlotStyle { plot in
+      plot.overlay {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+          .strokeBorder(AppTheme.border.opacity(0.7), lineWidth: 1)
+      }
+    }
     .chartYAxis {
       AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { value in
         AxisGridLine().foregroundStyle(AppTheme.border.opacity(0.5))

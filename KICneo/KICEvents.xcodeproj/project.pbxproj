@@ -36,9 +36,9 @@
 		E50A38B62F4B73F8001604C4 /* KICEventsTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KICEventsTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E50A38C02F4B73F8001604C4 /* KICEventsUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KICEventsUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E50A38ED2F4C723A001604C4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		E5AC1C0A2F70000100000002 /* KICneo.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = KICneo.icon; sourceTree = "<group>"; };
 		E50A38EE2F4C723A001604C4 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		E50A38EF2F4C723A001604C4 /* KICEventsApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KICEventsApp.swift; sourceTree = "<group>"; };
+		E5AC1C0A2F70000100000002 /* KICneo.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = KICneo.icon; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */

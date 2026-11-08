@@ -127,11 +127,10 @@ class EventViewModel: ObservableObject {
     displayEvents.filter { isApplying($0) }.count
   }
 
-  /// 参加中（学校で申込済み）を先頭に、関心タグに合うものを次に並べる。
+  /// 参加中（学校で申込済み）を先頭に。それ以外は学校の一覧の順序のまま（関心タグによる並べ替えはしない）。
   var sortedEvents: [KICEvent] {
     _ = stateRevision
-    let sorted = sortedByInterest(displayEvents)
-    return sorted.filter { isApplying($0) } + sorted.filter { !isApplying($0) }
+    return displayEvents.filter { isApplying($0) } + displayEvents.filter { !isApplying($0) }
   }
 
   var filteredEvents: [KICEvent] {
@@ -241,26 +240,6 @@ class EventViewModel: ObservableObject {
         activeEffect = nil
       }
     }
-  }
-
-  /// 関心タグに合うものを先に並べる。それ以外は学校の一覧の順序のまま。
-  private func sortedByInterest(_ items: [KICEvent]) -> [KICEvent] {
-    let interestTags = preferencesService.interestTags
-    guard !interestTags.isEmpty else { return items }
-
-    return items.enumerated().sorted { lhs, rhs in
-      let lMatch = matchesTags(lhs.element, interestTags: interestTags)
-      let rMatch = matchesTags(rhs.element, interestTags: interestTags)
-      if lMatch != rMatch {
-        return lMatch
-      }
-      return lhs.offset < rhs.offset
-    }.map(\.element)
-  }
-
-  private func matchesTags(_ event: KICEvent, interestTags: [String]) -> Bool {
-    let eventTags = [event.eventFormat, event.specialTag].compactMap { $0 }
-    return !Set(interestTags).isDisjoint(with: Set(eventTags))
   }
 
   /// 学校の「イベント申込」の1件から、一覧に出す説明会を作る。

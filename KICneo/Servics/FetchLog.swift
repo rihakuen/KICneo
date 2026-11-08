@@ -6,6 +6,8 @@ import Foundation
 nonisolated enum FetchLog {
   enum Key: String {
     case timetable, schoolEvents, huntActivities, studentCard, grades
+    /// 学校からのお知らせ（トップページの未読の一覧）
+    case notices
     /// 出欠と出席率（まとめて1つの期限で扱う）
     case attendance
   }
@@ -15,6 +17,7 @@ nonisolated enum FetchLog {
   static func ttl(_ key: Key) -> TimeInterval {
     switch key {
     case .schoolEvents: 30 * 60            // 説明会の一覧（残席・締切が動くので短め）
+    case .notices: 30 * 60                 // お知らせ（トップページを1回読むだけなので短め）
     case .huntActivities: 6 * 60 * 60      // 就職活動
     case .attendance, .grades: 24 * 60 * 60 // 出欠・出席率・成績
     case .timetable: 7 * 24 * 60 * 60      // 時間割

@@ -106,6 +106,10 @@ struct SchoolLoginView: View {
   @FocusState private var focused: Field?
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private enum Field { case username, password }
+  /// 表示されたときの入場（タイル → 見出し → 入力欄の順に浮かぶ）
+  @State private var appeared = false
+  /// ログインできたあと、ホームへ移る前に中身を消しておく
+  @State private var leaving = false
 
   var body: some View {
     ZStack {
@@ -113,22 +117,21 @@ struct SchoolLoginView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 32) {
           VStack(alignment: .leading, spacing: AppTheme.Space.lg) {
-            Image(systemName: "graduationcap.fill")
-              .font(.system(size: 24, weight: .medium))
-              .foregroundStyle(AppTheme.primaryAction)
-              .frame(width: 56, height: 56)
-              .background(AppTheme.formatTagBackground)
-              .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.small, style: .continuous))
+            BrandIconTile(side: 72, revealed: appeared)
+              .shadow(color: BrandColors.tile.opacity(0.22), radius: 12, y: 8)
+              .scaleEffect(appeared || reduceMotion ? 1 : 0.86, anchor: .bottomLeading)
+              .opacity(appeared ? 1 : 0)
+              .animation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.5, dampingFraction: 0.8), value: appeared)
               .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: AppTheme.Space.sm) {
-              Text("KICneo")
-                .font(.largeTitle.bold())
+              BrandWordmark(fontSize: 34)
                 .accessibilityAddTraits(.isHeader)
               Text("学校ポータルのアカウントでログイン")
                 .font(AppTheme.Typography.body)
                 .foregroundStyle(AppTheme.textSecondary)
             }
+            .modifier(LoginEntrance(shown: appeared, delay: 0.15, reduceMotion: reduceMotion))
           }
           .padding(.top, AppTheme.Space.section)
 
@@ -170,6 +173,9 @@ struct SchoolLoginView: View {
                 await school.login(id: username, password: password)
                 if school.isLoggedIn {
                   password = ""
+                  // 中身を消してから、ホームへの「タイルが広がる」動きに渡す
+                  withAnimation(.easeIn(duration: reduceMotion ? 0.1 : 0.22)) { leaving = true }
+                  try? await Task.sleep(for: .milliseconds(reduceMotion ? 100 : 240))
                   onLoggedIn()
                 }
               }
@@ -191,12 +197,16 @@ struct SchoolLoginView: View {
           }
           .padding(AppTheme.Space.card)
           .walletCard()
+          .modifier(LoginEntrance(shown: appeared, delay: 0.25, reduceMotion: reduceMotion))
 
           Label("パスワードは端末のキーチェーンに保存されます。", systemImage: "lock")
             .font(AppTheme.Typography.caption)
             .foregroundStyle(AppTheme.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
+            .modifier(LoginEntrance(shown: appeared, delay: 0.35, reduceMotion: reduceMotion))
         }
+        .opacity(leaving ? 0 : 1)
+        .scaleEffect(leaving && !reduceMotion ? 0.97 : 1)
         .foregroundStyle(AppTheme.textPrimary)
         .padding(AppTheme.Space.page)
         .frame(maxWidth: 480)
@@ -204,6 +214,25 @@ struct SchoolLoginView: View {
       }
       .scrollDismissesKeyboard(.interactively)
     }
+    .onAppear {
+      leaving = false
+      appeared = true
+    }
+  }
+}
+
+/// ログイン画面の各ブロックの入場（少し下から、ぼかしが取れながら浮かぶ）
+private struct LoginEntrance: ViewModifier {
+  let shown: Bool
+  let delay: Double
+  let reduceMotion: Bool
+
+  func body(content: Content) -> some View {
+    content
+      .opacity(shown ? 1 : 0)
+      .offset(y: shown || reduceMotion ? 0 : 14)
+      .blur(radius: shown || reduceMotion ? 0 : 4)
+      .animation(reduceMotion ? .easeOut(duration: 0.2) : .smooth(duration: 0.55).delay(delay), value: shown)
   }
 }
 
@@ -419,7 +448,7 @@ struct StudentCardScreen: View {
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: AppTheme.Space.md, verticalSpacing: AppTheme.Space.sm) {
               cardRow("学年 / クラス", [student?.value("学年").map { "\($0)年" }, student?.value("クラス").map { "\($0)組" },
                 student?.value("学生NO").map { "\($0)番" }].compactMap { $0 }.joined(separator: " "))
-              ForEach(["学籍番号", "学科", "専攻", "コース", "生年月日", "性別", "居住状態"], id: \.self) { label in
+              ForEach(["学籍番号", "学科", "コース", "生年月日", "性別"], id: \.self) { label in
                 cardRow(label, student?.value(label))
               }
             }

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 成績。学校ポータル「成績」ページの全科目を、学年次（1年次〜）ごと、または通算で並べる。
-/// ふだんは評価（A〜E）だけを出し、科目をタップするとその科目の点数を表示する（右上のボタンで全科目まとめて表示）。
+/// ふだんは評価（A〜E）だけを出し、科目をタップするとその科目の点数を表示する。
 /// 値（点数・評価・単位・区分）はすべて学校の原文。まだ評価のない欄は「—」。
 struct GradesScreen: View {
   @ObservedObject var school: SchoolViewModel
@@ -9,7 +9,6 @@ struct GradesScreen: View {
   @State private var selection: Scope?
   /// 点数を表示している科目
   @State private var revealed: Set<String> = []
-  @State private var revealAll = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   enum Scope: Hashable {
@@ -70,20 +69,6 @@ struct GradesScreen: View {
     .foregroundStyle(AppTheme.textPrimary)
     .navigationTitle("成績")
     .navigationBarTitleDisplayMode(.inline)
-    .toolbar {
-      if !school.grades.isEmpty {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button(revealAll ? "点数を隠す" : "点数を表示", systemImage: revealAll ? "eye.slash" : "eye") {
-            AppHaptics.selection()
-            withAnimation(AppTheme.Motion.feedback(reduce: reduceMotion)) {
-              revealAll.toggle()
-              if !revealAll { revealed = [] }
-            }
-          }
-          .contentTransition(.symbolEffect(.replace))
-        }
-      }
-    }
     .task { await school.loadGrades() }
     .refreshable { await school.loadGrades(force: true) }
   }
@@ -203,7 +188,7 @@ struct GradesScreen: View {
 
   /// 1科目の行。タップで、その科目の点数を表示 / 非表示にする。
   private func gradeRow(_ record: GradeRecord) -> some View {
-    let showsScore = revealAll || revealed.contains(record.id)
+    let showsScore = revealed.contains(record.id)
     return Button {
       AppHaptics.selection()
       withAnimation(AppTheme.Motion.feedback(reduce: reduceMotion)) {

@@ -25,6 +25,13 @@ final class SchoolViewModel: ObservableObject {
   @Published private(set) var applyingEventTitles: Set<String> = []
   /// 成績（学校ポータル「成績」ページの全科目）
   @Published private(set) var grades: [GradeRecord] = []
+  /// 学校からのお知らせ（新しい順）。学校側で既読になって消えた分も、しばらく端末に残す
+  @Published private(set) var notices: [SchoolNotice] = []
+  @Published private(set) var isLoadingNotices = false
+  @Published private(set) var noticesLoadFailed = false
+  /// このアプリで開いたお知らせ（未読の印を消すため）
+  @Published private(set) var readNoticeKeys: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "read_notice_keys") ?? [])
+  private var noticeDetails: [String: SchoolNoticeDetail] = [:]
   @Published private(set) var isLoadingGrades = false
   @Published private(set) var gradesLoadFailed = false
   private var gradesLoaded = false
@@ -72,6 +79,10 @@ final class SchoolViewModel: ObservableObject {
     async let students: [StudentCardData] = Task.detached { AccountCache.load(AccountCache.studentCard, accountID: id) }.value
     async let details: [SchoolEventDetail] = Task.detached { AccountCache.load(AccountCache.eventDetails, accountID: id) }.value
     let loaded = await (attendance, timetable, hunt, events, rates, students, details)
+    let savedNotices: [SchoolNotice] = await Task.detached { AccountCache.load(AccountCache.notices, accountID: id) }.value
+    let savedNoticeDetails: [SchoolNoticeDetail] = await Task.detached { AccountCache.load(AccountCache.noticeDetails, accountID: id) }.value
+    if notices.isEmpty { notices = savedNotices }
+    for detail in savedNoticeDetails where noticeDetails[detail.key] == nil { noticeDetails[detail.key] = detail }
     // 学校からの取得が先に終わっていたら、古い保存内容で上書きしない
     if days.isEmpty {
       days = loaded.0
@@ -628,6 +639,101 @@ final class SchoolViewModel: ObservableObject {
   /// 実行中の一覧の取得。`force` の呼び出しは、これが終わるのを待ってから取り直す。
   private var schoolEventsTask: Task<Void, Never>?
 
+  // MARK: 学校からのお知らせ
+
+  /// トップページの未読のお知らせを読み、端末に保存してある分とまとめる。
+  /// 学校側では詳細を開くと既読になって一覧から消えるので、消えた分も 60 日・30 件まで残す（詳細は保存済みのものを出す）。
+  func loadNotices(force: Bool = false) async {
+    guard isLoggedIn, !isDemo, !isLoadingNotices else { return }
+    if !force, !notices.isEmpty, FetchLog.isFresh(.notices, account: accountID) { return }
+    isLoadingNotices = true
+    defer { isLoadingNotices = false }
+    let account = accountID
+    let saved = await Task.detached(operation: { KeychainService.load() }).value
+    do {
+      let fetched = try await client.schoolNotices(retryWith: saved.map { ($0.id, $0.password) })
+      guard isCurrent(account) else { return }
+      noticesLoadFailed = false
+      FetchLog.markFetched(.notices, account: accountID)
+      let merged = Self.mergeNotices(fetched: fetched, saved: notices)
+      if merged != notices { notices = merged }
+      saveCache(merged, name: AccountCache.notices)
+    } catch {
+      guard isCurrent(account) else { return }
+      noticesLoadFailed = true
+      #if DEBUG
+      print("[School] お知らせ: 取得失敗 \(error)")
+      #endif
+    }
+  }
+
+  nonisolated static func mergeNotices(fetched: [SchoolNotice], saved: [SchoolNotice], now: Date = .now) -> [SchoolNotice] {
+    let fetchedKeys = Set(fetched.map(\.key))
+    let limit = AttendanceRatePeriod.calendar.date(byAdding: .day, value: -60, to: now) ?? now
+    let kept = saved
+      .filter { !fetchedKeys.contains($0.key) && ($0.postedAt ?? now) >= limit }
+      .map { notice -> SchoolNotice in
+        var stale = notice
+        stale.eventTarget = nil // トップページから消えたので、学校の詳細ページはもう開けない
+        return stale
+      }
+    let all = fetched + kept
+    return Array(all.sorted { ($0.postedAt ?? .distantPast) > ($1.postedAt ?? .distantPast) }.prefix(30))
+  }
+
+  func isNoticeUnread(_ notice: SchoolNotice) -> Bool {
+    !readNoticeKeys.contains(notice.key)
+  }
+
+  func cachedNoticeDetail(_ notice: SchoolNotice) -> SchoolNoticeDetail? {
+    noticeDetails[notice.key]
+  }
+
+  /// お知らせの詳細。保存済みならそれを返し、無ければ学校の詳細ページを開く（学校側でも既読になる）。
+  func noticeDetail(_ notice: SchoolNotice) async -> SchoolNoticeDetail? {
+    markNoticeRead(notice)
+    if let cached = noticeDetails[notice.key] { return cached }
+    guard isLoggedIn, !isDemo else { return nil }
+    let saved = await Task.detached(operation: { KeychainService.load() }).value
+    do {
+      let detail = try await client.noticeDetail(notice, retryWith: saved.map { ($0.id, $0.password) })
+      noticeDetails[notice.key] = detail
+      saveCache(Array(noticeDetails.values), name: AccountCache.noticeDetails)
+      return detail
+    } catch {
+      #if DEBUG
+      print("[School] お知らせの詳細: 取得失敗 \(error)")
+      #endif
+      return nil
+    }
+  }
+
+  /// お知らせの添付ファイル。端末に保存済みならそれを返し、無ければ学校から取得して保存する。
+  func noticeAttachmentData(_ attachment: SchoolNoticeDetail.Attachment, of notice: SchoolNotice) async -> Data? {
+    // 保存名：お知らせの key から作る固定の番号（hashValue は起動ごとに変わるので使わない）＋ファイル名
+    let stable = notice.key.utf8.reduce(UInt64(5381)) { ($0 &* 33) &+ UInt64($1) }
+    let name = "notice_" + String(stable, radix: 36) + "_" + attachment.name
+    if let cached = await Task.detached(operation: { AttachmentCache.load(name) }).value { return cached }
+    guard isLoggedIn, !isDemo else { return nil }
+    let saved = await Task.detached(operation: { KeychainService.load() }).value
+    do {
+      let data = try await client.noticeAttachment(attachment, of: notice, retryWith: saved.map { ($0.id, $0.password) })
+      Task.detached { AttachmentCache.save(data, name: name) }
+      return data
+    } catch {
+      #if DEBUG
+      print("[School] お知らせの添付: 取得失敗 \(error)")
+      #endif
+      return nil
+    }
+  }
+
+  private func markNoticeRead(_ notice: SchoolNotice) {
+    guard !readNoticeKeys.contains(notice.key) else { return }
+    readNoticeKeys.insert(notice.key)
+    UserDefaults.standard.set(Array(readNoticeKeys), forKey: "read_notice_keys")
+  }
+
   func loadSchoolEvents(force: Bool = false) async {
     guard isLoggedIn, !isDemo else { return }
     if schoolEventsTask != nil {
@@ -827,6 +933,10 @@ final class SchoolViewModel: ObservableObject {
     days = []
     student = nil
     grades = []
+    notices = []
+    noticeDetails = [:]
+    readNoticeKeys = []
+    UserDefaults.standard.removeObject(forKey: "read_notice_keys")
     gradesLoaded = false
     gradesLoadFailed = false
     huntActivities = []

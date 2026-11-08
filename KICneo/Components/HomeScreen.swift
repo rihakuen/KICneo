@@ -19,6 +19,8 @@ struct HomeScreen: View {
   var onRefresh: () async -> Void
   /// 表示する月が変わったとき（初回表示を含む）に、その月の出欠・出席率を取得してもらう。
   var onMonthChange: (_ from: Date, _ through: Date) async -> Void
+  /// カレンダーの下に置く「学校からのお知らせ」（ContentView から渡す。プレビューでは無し）
+  var noticesSection: AnyView
 
   /// 日付ごとの記録。セルごとに作り直さないよう、初期化時に1回だけ作る。
   private let attendanceByDay: [Date: AttendanceDay]
@@ -44,8 +46,10 @@ struct HomeScreen: View {
     isLoadingTimetable: Bool,
     timetableLoadFailed: Bool,
     onRefresh: @escaping () async -> Void,
-    onMonthChange: @escaping (_ from: Date, _ through: Date) async -> Void
+    onMonthChange: @escaping (_ from: Date, _ through: Date) async -> Void,
+    noticesSection: AnyView = AnyView(EmptyView())
   ) {
+    self.noticesSection = noticesSection
     self.records = records
     self.rates = rates
     self.loadedRatePeriods = loadedRatePeriods
@@ -112,15 +116,21 @@ struct HomeScreen: View {
   /// 月のカレンダーの高さ：曜日の行 + 週の数（4〜6）× 1行の高さ。その月に必要な週の数だけにして、余った行を出さない。
   /// スワイプ中は、行き先の月と今の月の高い方に合わせる（中身が切れないように）。
   private var pagerHeight: CGFloat {
-    let target: Int
+    let target: Date
     if dragX < 0, pageRange.contains(pageOffset + 1) {
-      target = weekRows(monthStart(offset: pageOffset + 1))
+      target = monthStart(offset: pageOffset + 1)
     } else if dragX > 0, pageRange.contains(pageOffset - 1) {
-      target = weekRows(monthStart(offset: pageOffset - 1))
+      target = monthStart(offset: pageOffset - 1)
     } else {
-      target = weekRows(currentMonth)
+      target = currentMonth
     }
-    return 24 + CGFloat(max(target, weekRows(currentMonth))) * 50
+    return max(gridHeight(target), gridHeight(currentMonth))
+  }
+
+  /// 月のカレンダー（曜日の行＋日付）の実際の高さ。描いたときに測った値を使い、まだ測っていない月は行数から見積もる。
+  /// 文字サイズの設定や「休」の字でセルが少し高くなっても、最後の週が切れないようにするため。
+  private func gridHeight(_ month: Date) -> CGFloat {
+    monthGridHeights[month] ?? (24 + CGFloat(weekRows(month)) * 50)
   }
 
   /// その月を表示するのに必要な週の数（1日の曜日と日数で決まる。4〜6）
@@ -128,6 +138,8 @@ struct HomeScreen: View {
     let leading = calendar.component(.weekday, from: monthStart) - 1
     return Int((Double(leading + dates(in: monthStart).count) / 7).rounded(.up))
   }
+  /// 月ごとに測った、月のカレンダーの高さ（月のはじめの日 → 高さ）
+  @State private var monthGridHeights: [Date: CGFloat] = [:]
   /// スワイプ中に見える、月と月のすきま。
   private let pageGap: CGFloat = 32
 
@@ -321,6 +333,7 @@ struct HomeScreen: View {
           }
           summaryCard
           weekCard
+          noticesSection
         }
         .padding(AppTheme.Space.page)
       }
@@ -987,6 +1000,11 @@ struct HomeScreen: View {
       ForEach((0..<trailing).map { 100 + $0 }, id: \.self) { id in
         fillerCell(calendar.date(byAdding: .day, value: id - 100, to: dayAfterLast))
       }
+    }
+    // 中身どおりの高さを測って、ページャーの高さに使う
+    .fixedSize(horizontal: false, vertical: true)
+    .onGeometryChange(for: CGFloat.self) { ceil($0.size.height) } action: { height in
+      if monthGridHeights[monthStart] != height { monthGridHeights[monthStart] = height }
     }
     .frame(maxHeight: .infinity, alignment: .top)
   }

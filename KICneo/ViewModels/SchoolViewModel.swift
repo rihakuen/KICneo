@@ -255,6 +255,8 @@ final class SchoolViewModel: ObservableObject {
     eventDetails = Dictionary(DemoData.eventDetails.map { (Self.detailKey(title: $0.title, date: $0.date), $0) }, uniquingKeysWith: { $1 })
     grades = DemoData.grades
     huntActivities = DemoData.huntActivities
+    notices = DemoData.notices
+    noticeDetails = Dictionary(DemoData.noticeDetails.map { ($0.key, $0) }, uniquingKeysWith: { $1 })
   }
 
   /// ID とパスワードが保存されていれば自動でログインする（起動時に使う）。

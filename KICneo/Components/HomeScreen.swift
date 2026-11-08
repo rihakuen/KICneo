@@ -138,6 +138,8 @@ struct HomeScreen: View {
     let leading = calendar.component(.weekday, from: monthStart) - 1
     return Int((Double(leading + dates(in: monthStart).count) / 7).rounded(.up))
   }
+  /// 画面上端の時計・電波の帯の高さ（上にスクロールした内容をぼかす帯に使う）
+  @State private var statusBarHeight: CGFloat = 0
   /// 月ごとに測った、月のカレンダーの高さ（月のはじめの日 → 高さ）
   @State private var monthGridHeights: [Date: CGFloat] = [:]
   /// スワイプ中に見える、月と月のすきま。
@@ -337,6 +339,19 @@ struct HomeScreen: View {
         }
         .padding(AppTheme.Space.page)
       }
+    }
+    // 上へスクロールしたとき、時計・電波の後ろに来た内容をぼかす（ナビゲーションバーを隠しているので自前で敷く）
+    .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { statusBarHeight = $0 }
+    .overlay(alignment: .top) {
+      Rectangle()
+        .fill(.ultraThinMaterial)
+        .frame(height: statusBarHeight + 14)
+        // 下の端はぼかしを徐々に弱め、境目の線が見えないようにする
+        .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.55),
+                                     .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
+        .ignoresSafeArea(edges: .top)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
     .foregroundStyle(AppTheme.textPrimary)
     .refreshable {

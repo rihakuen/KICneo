@@ -14,7 +14,7 @@ struct ContentView: View {
   /// 起動時・ログイン直後に出す、アイコンのタイルの全画面。消えるときに拡大しながらフェードしてホームが見える
   private enum Splash { case launch, afterLogin }
   @State private var splash: Splash? = .launch
-  /// 起動の演出を最低限見せる時間が過ぎたか（一瞬で消えてチラつかないように）
+  /// 起動のタイルの入場（文字が出そろうまで）が終わったか。終わる前には消さない
   @State private var splashMinimumDone = false
 
   var body: some View {
@@ -75,7 +75,10 @@ struct ContentView: View {
       .scaleEffect(splash == nil || reduceMotion ? 1 : 0.94)
 
       if let splash {
-        StartupLoadingView(entrance: splash == .launch)
+        StartupLoadingView(entrance: splash == .launch) {
+          splashMinimumDone = true
+          finishLaunchSplash()
+        }
           // 消えるとき：タイルごと拡大しながらフェードして、下のホームが広がって見える
           .transition(.asymmetric(insertion: .identity,
                                   removal: reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 1.6))))
@@ -111,12 +114,6 @@ struct ContentView: View {
         .interactiveDismissDisabled()
     }
     .onChange(of: startupDone) { _, _ in finishLaunchSplash() }
-    // 起動の演出を最低限見せる（動きを減らす設定では短く）
-    .task {
-      try? await Task.sleep(for: .milliseconds(reduceMotion ? 400 : 1300))
-      splashMinimumDone = true
-      finishLaunchSplash()
-    }
     .onChange(of: school.schoolEvents) { _, events in viewModel.schoolEvents = events }
     .task {
       if DemoData.isEnabled { // スクリーンショット用（起動引数 -demo）。学校には接続しない

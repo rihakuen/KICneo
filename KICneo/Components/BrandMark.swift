@@ -131,6 +131,8 @@ struct BrandProgressLine: View {
 /// `entrance` が false のとき（ログイン直後）は、文字を最初から出しておく。
 struct StartupLoadingView: View {
   var entrance = true
+  /// タイルの文字が出そろったとき（表示されてから数えるので、起動が遅くても文字が出る前に消えない）
+  var onEntranceFinished: () -> Void = {}
   @State private var shown = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -154,6 +156,11 @@ struct StartupLoadingView: View {
     }
     .animation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.5, dampingFraction: 0.78), value: shown)
     .onAppear { shown = true }
+    .task {
+      // 入場（タイル → KIC → neo）が終わるまで待ってから知らせる
+      try? await Task.sleep(for: .milliseconds(entrance && !reduceMotion ? 1100 : 250))
+      onEntranceFinished()
+    }
     .accessibilityElement(children: .combine)
     .accessibilityLabel("読み込み中")
   }

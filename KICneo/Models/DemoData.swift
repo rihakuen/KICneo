@@ -322,3 +322,50 @@ nonisolated enum DemoData {
     return rates
   }
 }
+
+// MARK: 学校からのお知らせ（デモ・プレビュー用。内容は架空）
+
+extension DemoData {
+  /// 今日から `daysAgo` 日前の日付（学校の表記「2026/11/06」）
+  private static func noticeDate(_ daysAgo: Int) -> String {
+    let calendar = AttendanceRatePeriod.calendar
+    let date = calendar.date(byAdding: .day, value: -daysAgo, to: .now) ?? .now
+    let c = calendar.dateComponents([.year, .month, .day], from: date)
+    return String(format: "%04d/%02d/%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+  }
+
+  static var notices: [SchoolNotice] {
+    [
+      SchoolNotice(section: "お知らせ", title: "【重要】今月分の出席状況確認のお願い", category: "連絡・スケジュール",
+                   date: noticeDate(1), poster: "教務課", hasAttachment: true, eventTarget: "demo-1"),
+      SchoolNotice(section: "授業関連", title: "後期 定期試験の時間割を掲載しました", category: "授業変更関連",
+                   date: noticeDate(3), poster: "教務課", hasAttachment: false, eventTarget: "demo-2"),
+      SchoolNotice(section: "お知らせ", title: "学内合同企業説明会（12月）の参加申込について", category: "キャリアセンター",
+                   date: noticeDate(5), poster: "キャリアセンター", hasAttachment: false, eventTarget: "demo-3"),
+      SchoolNotice(section: "連絡事項", title: "冬季休業中の図書室の開室日", category: "事務局窓口・奨学金",
+                   date: noticeDate(9), poster: "事務局", hasAttachment: false, eventTarget: "demo-4")
+    ]
+  }
+
+  static var noticeDetails: [SchoolNoticeDetail] {
+    let items = notices
+    return [
+      SchoolNoticeDetail(key: items[0].key, poster: "教務課", startDate: items[0].date, endDate: noticeDate(-20),
+                         title: items[0].title,
+                         body: "ポータルサイトで今月分の出席状況を確認してください。\n\n※変更の申し出期限：今月20日 17時まで\n\n誤りを見つけた場合は、担任の先生へ連絡してください。",
+                         attachments: []),
+      SchoolNoticeDetail(key: items[1].key, poster: "教務課", startDate: items[1].date, endDate: noticeDate(-30),
+                         title: items[1].title,
+                         body: "後期定期試験の時間割を掲載しました。\n試験期間中は、学生証を必ず持参してください。",
+                         attachments: []),
+      SchoolNoticeDetail(key: items[2].key, poster: "キャリアセンター", startDate: items[2].date, endDate: noticeDate(-14),
+                         title: items[2].title,
+                         body: "12月の学内合同企業説明会の申込を受け付けています。\n参加希望者は「イベント申込」から申し込んでください。",
+                         attachments: []),
+      SchoolNoticeDetail(key: items[3].key, poster: "事務局", startDate: items[3].date, endDate: noticeDate(-40),
+                         title: items[3].title,
+                         body: "冬季休業中は、図書室を平日の 10:00〜16:00 に開室します。",
+                         attachments: [])
+    ]
+  }
+}

@@ -52,7 +52,7 @@ struct ContentView: View {
             },
             onMonthChange: { from, through in
               school.requestMonthlyRate(for: from)
-              await school.loadAttendance(from: from, through: through)
+              Task { await school.loadAttendance(from: from, through: through) }
             },
             noticesSection: AnyView(SchoolNoticesCard(school: school))
           )

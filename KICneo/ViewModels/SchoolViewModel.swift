@@ -205,6 +205,11 @@ final class SchoolViewModel: ObservableObject {
         #if DEBUG
         print("[School] 出欠・出席率：前回の取得から24時間以内なので、保存済みの内容を使う")
         #endif
+        // ただし、ログインが終わる前に画面で開いていた月の出席率は取る（保存済みの値がある期間は loadRates が飛ばす）。
+        // 以前はここで何もせずに戻ったため、保存に無い月が「取得待ち」のまま止まっていた
+        if !shownRateMonths.isEmpty {
+          Task { await loadRates(months: shownRateMonths, includeOverall: false) }
+        }
         return
       }
       Task {
@@ -436,14 +441,24 @@ final class SchoolViewModel: ObservableObject {
   /// 月・学年・総合の範囲をまとめて、学校の集計ページに順番に問い合わせる。
   /// 総合は、実際の最初の記録の日がわかっているときだけ問い合わせる（推測した年からは問い合わせない）。
   func loadRates(months: [Date], includeOverall: Bool, overallStart: Date? = nil) async {
-    guard isLoggedIn, !isDemo else { return }
+    guard isLoggedIn, !isDemo else {
+      #if DEBUG
+      print("[School] 出席率：取得しない（ログイン \(isLoggedIn)・デモ \(isDemo)）")
+      #endif
+      return
+    }
     let fresh = FetchLog.isFresh(.attendance, account: accountID)
     let entries = AttendanceRatePeriod.batch(months: months,
       overallStart: overallStart ?? attendanceRates.overallFrom, includeOverall: includeOverall)
       .filter { !loadedRatePeriods.contains($0) && !loadingRatePeriods.contains($0) }
       // 前回の取得から24時間以内なら、保存済みの値がある期間は取りに行かない
       .filter { !fresh || attendanceRates.value($0.scope, month: $0.from) == nil }
-    guard !entries.isEmpty else { return }
+    guard !entries.isEmpty else {
+      #if DEBUG
+      print("[School] 出席率：取得済み・取得中・保存済みのため取りに行かない（\(months.count)か月）")
+      #endif
+      return
+    }
     let generation = rateGeneration
     let requestedAccount = accountID
     loadingRatePeriods.formUnion(entries)
@@ -453,7 +468,12 @@ final class SchoolViewModel: ObservableObject {
     do {
       let values = try await client.attendanceRates(
         ranges: entries.map { ($0.from, $0.through) }, retryWith: saved.map { ($0.id, $0.password) })
-      guard generation == rateGeneration, requestedAccount == accountID, isLoggedIn else { return }
+      guard generation == rateGeneration, requestedAccount == accountID, isLoggedIn else {
+        #if DEBUG
+        print("[School] 出席率：途中で更新・ログインし直したため、この結果は使わない")
+        #endif
+        return
+      }
       guard values.count == entries.count else { throw SchoolError.parseFailed }
       #if DEBUG
       print("[School] 出席率: \(zip(entries, values).map { "\($0.scope)=\($1.map { String($0) } ?? "値なし")" }.joined(separator: ", "))")

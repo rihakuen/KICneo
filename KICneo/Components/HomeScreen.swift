@@ -18,7 +18,9 @@ struct HomeScreen: View {
   var timetableLoadFailed: Bool
   var onRefresh: () async -> Void
   /// 表示する月が変わったとき（初回表示を含む）に、その月の出欠・出席率を取得してもらう。
-  var onMonthChange: (_ from: Date, _ through: Date) async -> Void
+  /// （同期の呼び出しにしている：async のクロージャで渡すと、受け取り側で日付が 2001/1/1（値 0）に化けることがあったため。
+  ///  取得は受け取り側が Task で始める）
+  var onMonthChange: (_ from: Date, _ through: Date) -> Void
   /// カレンダーの下に置く「学校からのお知らせ」（ContentView から渡す。プレビューでは無し）
   var noticesSection: AnyView
 
@@ -46,7 +48,7 @@ struct HomeScreen: View {
     isLoadingTimetable: Bool,
     timetableLoadFailed: Bool,
     onRefresh: @escaping () async -> Void,
-    onMonthChange: @escaping (_ from: Date, _ through: Date) async -> Void,
+    onMonthChange: @escaping (_ from: Date, _ through: Date) -> Void,
     noticesSection: AnyView = AnyView(EmptyView())
   ) {
     self.noticesSection = noticesSection
@@ -129,8 +131,12 @@ struct HomeScreen: View {
   /// 月のカレンダー（曜日の行＋日付）の実際の高さ。描いたときに測った値を使い、まだ測っていない月は行数から見積もる。
   /// 文字サイズの設定や「休」の字でセルが少し高くなっても、最後の週が切れないようにするため。
   private func gridHeight(_ month: Date) -> CGFloat {
-    monthGridHeights[month] ?? (24 + CGFloat(weekRows(month)) * 50)
+    // どの月も 6 週ぶんで描くので、高さはいつも同じ（測った値のうち最大のもの）
+    monthGridHeights.values.max() ?? (24 + CGFloat(Self.monthRows) * 50)
   }
+
+  /// 月のカレンダーの行数。月によって高さが変わらないよう、いつも 6 週ぶん出す（足りない分は翌月の日付を薄く出す）
+  private static let monthRows = 6
 
   /// その月を表示するのに必要な週の数（1日の曜日と日数で決まる。4〜6）
   private func weekRows(_ monthStart: Date) -> Int {
@@ -289,7 +295,7 @@ struct HomeScreen: View {
   /// 週に含まれる月の出欠・出席率を取得してもらう
   private func loadWeekMonths() async {
     for month in monthsInWeek {
-      if let last = dates(in: month).last { await onMonthChange(month, last) }
+      if let last = dates(in: month).last { onMonthChange(month, last) }
     }
   }
 
@@ -368,7 +374,7 @@ struct HomeScreen: View {
     // 月のカレンダーを表示中は、表示している月の出欠・出席率も取得してもらう
     .task(id: calendarMode == .month ? pageOffset : Int.min) {
       guard calendarMode == .month, let last = dates(in: currentMonth).last else { return }
-      await onMonthChange(currentMonth, last)
+      onMonthChange(currentMonth, last)
     }
     .onChange(of: pageOffset) { _, _ in followVisibleMonth() }
     .sheet(isPresented: $showsDayAgenda) { dayAgendaSheet }
@@ -1001,7 +1007,7 @@ struct HomeScreen: View {
   private func monthGrid(_ monthStart: Date) -> some View {
     let days = dates(in: monthStart)
     let leading = calendar.component(.weekday, from: monthStart) - 1
-    let rows = weekRows(monthStart)
+    let rows = Self.monthRows
     // 各マス：その月の日（タップできる）か、前月・翌月の日（薄い数字だけ）か
     let cells: [(date: Date, inMonth: Bool)] = (0..<(rows * 7)).map { index in
       let offset = index - leading
